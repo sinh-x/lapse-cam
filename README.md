@@ -61,4 +61,6 @@ This is a foreground-only prototype, with one current session, portrait output, 
 
 ## Repository
 
-Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. Initial implementation is on `feature/no-ticket-android-timelapse`; `develop` and `main` remain at the initialization commit pending review. No remote has been created or pushed.
+Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. The initial implementation has been merged into `main`; `develop` is synchronized from `main`. No remote has been created or pushed.
+
+Branch structure: **main → develop → feature**. Create feature branches from up-to-date `develop`, but target **`main` for all feature merges**, then fast-forward `develop` from `main`. See [branching strategy and commands](docs/BRANCHING.md).

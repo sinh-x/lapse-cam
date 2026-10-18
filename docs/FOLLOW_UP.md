@@ -23,7 +23,7 @@
 
 ## Starting point
 
-Read `README.md` and `docs/sessions/d-1044a6.md`. Initial code is on `feature/no-ticket-android-timelapse`, not merged into `develop` or `main`. Base follow-up work on that checkpoint (or integrate it into `develop` after review); do not branch from the still-empty `develop` and lose the prototype. No remote exists yet.
+Read `README.md`, [branching strategy](BRANCHING.md), and `docs/sessions/d-1044a6.md` (historical evidence). The initial implementation has been merged into `main`, and `develop` is synchronized from `main`. Start follow-up work on a feature branch from up-to-date `develop`; target `main` for the feature merge, then fast-forward `develop` from `main`. No remote exists yet.
 
 On the current NixOS host, builds succeeded with:
 
