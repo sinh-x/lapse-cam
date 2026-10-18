@@ -15,8 +15,8 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 object TimestampRenderer {
-    /** Normalize EXIF rotation, center-crop to portrait, and burn the clock into the pixels. */
-    fun render(photo: File, epochMillis: Long, zoneId: String): Bitmap {
+    /** Normalize EXIF, crop, reflect the front scene once, then stamp unmirrored clock text. */
+    fun render(photo: File, epochMillis: Long, zoneId: String, lens: SessionLens = SessionLens.REAR): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(photo.path, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Camera returned an unreadable photo" }
@@ -41,8 +41,11 @@ object TimestampRenderer {
                 val cropHeight = (VIDEO_HEIGHT / scale).roundToInt().coerceAtMost(image.height)
                 val left = (image.width - cropWidth) / 2
                 val top = (image.height - cropHeight) / 2
+                canvas.save()
+                if (lens == SessionLens.FRONT) canvas.scale(-1f, 1f, VIDEO_WIDTH / 2f, VIDEO_HEIGHT / 2f)
                 canvas.drawBitmap(image, Rect(left, top, left + cropWidth, top + cropHeight),
                     Rect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT), Paint(Paint.FILTER_BITMAP_FLAG))
+                canvas.restore()
                 drawClock(canvas, CaptureTiming.timestamp(epochMillis, zoneId))
             }
         } finally {

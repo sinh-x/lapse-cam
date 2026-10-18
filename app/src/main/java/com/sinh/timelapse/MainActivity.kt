@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.Surface
 import android.view.View
 import android.view.WindowManager
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.FrameLayout
@@ -46,6 +47,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var statistics: TextView
     private lateinit var interval: Spinner
     private lateinit var fps: Spinner
+    private lateinit var lens: Spinner
+    private lateinit var recovery: Button
     private lateinit var capture: Button
     private lateinit var export: Button
     private lateinit var discard: Button
@@ -53,8 +56,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var permission: Button
     private val intervals = listOf(1, 2, 5, 10, 30, 60)
     private val frameRates = listOf(15, 24, 30)
-    private var cameraBound = false
-    private var bindingCamera = false
+    private var requestedLens: SessionLens? = null
+    private var bindingGeneration = 0L
+    private var activityForeground = false
     private val handler = Handler(Looper.getMainLooper())
     private val clockTick = object : Runnable {
         override fun run() {
@@ -64,8 +68,11 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val requestCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-        if (allowed) bindCamera()
-        else {
+        if (allowed) {
+            invalidateCamera()
+            bindCamera()
+        } else {
+            invalidateCamera()
             permission.visibility = View.VISIBLE
             Toast.makeText(this, "Camera access is required to capture. You can still export saved photos.", Toast.LENGTH_LONG).show()
         }
@@ -79,19 +86,24 @@ class MainActivity : ComponentActivity() {
             val selectedFps = session?.fps ?: frameRates[fps.selectedItemPosition]
             val seconds = state.frames.toDouble() / selectedFps
             statistics.text = String.format(Locale.ROOT, "%d photos  ·  %.1fs video  ·  %d fps", state.frames, seconds, selectedFps)
-            status.text = if (state.exporting) "${state.message} ${state.progress}%" else state.message
+            status.text = if (state.exporting) "${state.message} ${state.progress}%"
+                else listOf(state.message, state.cameraMessage).filter { it.isNotEmpty() }.joinToString("\n")
             capture.text = when {
                 state.capturing -> "Stop capture"
                 session != null -> "Resume capture"
                 else -> "Start capture"
             }
-            capture.isEnabled = state.capturing || (!state.busy && cameraBound)
+            capture.isEnabled = state.capturing || (!state.busy && !state.recoveryBlocked && state.boundLens == state.lens)
             export.isEnabled = !state.busy && !state.capturing && state.frames > 0
             export.text = if (state.exporting) "Exporting ${state.progress}%" else "Export MP4"
             discard.isEnabled = !state.busy && !state.capturing && session != null
             open.isEnabled = state.video != null && !state.exporting
-            interval.isEnabled = session == null && !state.busy
-            fps.isEnabled = session == null && !state.busy
+            interval.isEnabled = state.canSelectLens
+            fps.isEnabled = state.canSelectLens
+            lens.isEnabled = state.canSelectLens
+            lens.setSelection(SessionLens.entries.indexOf(state.lens))
+            recovery.visibility = if (state.recoveryBlocked) View.VISIBLE else View.GONE
+            recovery.isEnabled = !state.busy
             if (session != null) {
                 interval.setSelection(intervals.indexOf((session.intervalMillis / 1000).toInt()).coerceAtLeast(0))
                 fps.setSelection(frameRates.indexOf(session.fps).coerceAtLeast(0))
@@ -99,6 +111,7 @@ class MainActivity : ComponentActivity() {
             if (state.capturing || state.savingPhoto || state.exporting) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            bindCamera()
         }
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
     }
@@ -147,9 +160,30 @@ class MainActivity : ComponentActivity() {
         permission = Button(this).apply {
             text = "Enable camera"
             visibility = if (hasCameraPermission()) View.GONE else View.VISIBLE
-            setOnClickListener { requestCamera.launch(Manifest.permission.CAMERA) }
+            setOnClickListener {
+                if (hasCameraPermission()) {
+                    invalidateCamera()
+                    bindCamera()
+                } else requestCamera.launch(Manifest.permission.CAMERA)
+            }
         }
         root.addView(permission)
+        recovery = Button(this).apply {
+            text = "Retry saved session recovery"
+            visibility = View.GONE
+            setOnClickListener { model.retryRecovery() }
+        }
+        root.addView(recovery)
+        lens = spinner(listOf("Rear camera", "Front camera")).apply {
+            contentDescription = "Session camera (fixed until session photos are deleted)"
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    model.selectLens(SessionLens.entries[position])
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+        }
+        root.addView(lens)
         val settings = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         interval = spinner(intervals.map { "Every ${it}s" }).apply { setSelection(2) }
         fps = spinner(frameRates.map { "$it fps" }).apply { setSelection(2) }
@@ -193,17 +227,32 @@ class MainActivity : ComponentActivity() {
         root.requestApplyInsets()
     }
 
+    private fun invalidateCamera() {
+        bindingGeneration++
+        requestedLens = null
+        model.attachCamera(null)
+    }
+
     private fun bindCamera() {
-        if (!hasCameraPermission() || cameraBound || bindingCamera) return
-        bindingCamera = true
+        val state = model.state.value ?: return
+        if (!activityForeground || !hasCameraPermission() || state.loading || state.recoveryBlocked) return
+        val selected = state.lens
+        if (requestedLens == selected) return
+        requestedLens = selected
+        val generation = ++bindingGeneration
+        model.attachCamera(null)
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            bindingCamera = false
-            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@addListener
+            val latest = model.state.value ?: return@addListener
+            if (!CapturePolicy.isCurrentBinding(generation, bindingGeneration, selected, latest.lens,
+                    activityForeground && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+                    hasCameraPermission() && !latest.loading && !latest.recoveryBlocked)) return@addListener
             try {
                 val provider = future.get()
-                val selector = CameraSelector.DEFAULT_BACK_CAMERA
-                check(provider.hasCamera(selector)) { "A rear camera is required" }
+                provider.unbindAll() // Do not leave the previous lens preview showing after a failed switch.
+                val selector = if (selected == SessionLens.FRONT) CameraSelector.DEFAULT_FRONT_CAMERA
+                    else CameraSelector.DEFAULT_BACK_CAMERA
+                check(provider.hasCamera(selector)) { "Selected ${selected.storedValue} camera is unavailable; no fallback used" }
                 val previewUseCase = Preview.Builder().setTargetRotation(Surface.ROTATION_0).build().apply {
                     surfaceProvider = preview.surfaceProvider
                 }
@@ -217,16 +266,12 @@ class MainActivity : ComponentActivity() {
                     .setViewPort(ViewPort.Builder(Rational(9, 16), Surface.ROTATION_0)
                         .setScaleType(ViewPort.FILL_CENTER).build())
                     .addUseCase(previewUseCase).addUseCase(imageCapture).build()
-                provider.unbindAll()
                 provider.bindToLifecycle(this, selector, group)
-                model.attachCamera(imageCapture)
-                cameraBound = true
+                // CameraX mirrors front PreviewView by default; do not apply another UI reflection.
+                model.attachCamera(imageCapture, selected)
                 permission.visibility = View.GONE
-                capture.isEnabled = model.state.value?.let { !it.busy } ?: false
             } catch (error: Exception) {
-                model.attachCamera(null)
-                cameraBound = false
-                status.text = "Camera error: ${error.message}. You can still export saved photos."
+                model.attachCamera(null, message = "Camera error: ${error.message}. Saved-photo export remains available.")
                 permission.text = "Retry camera"
                 permission.visibility = View.VISIBLE
             }
@@ -247,20 +292,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        activityForeground = true
         model.setForeground(true)
         handler.post(clockTick)
         bindCamera()
     }
 
     override fun onStop() {
+        activityForeground = false
+        invalidateCamera()
         model.setForeground(false)
         handler.removeCallbacks(clockTick)
         super.onStop()
-    }
-
-    override fun onDestroy() {
-        model.attachCamera(null)
-        super.onDestroy()
     }
 
     private fun hasCameraPermission() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED

@@ -56,6 +56,48 @@ class CaptureTimingTest {
         }
     }
 
+    @Test fun `all intervals and frame rates preserve cadence and exact timeline`() {
+        for (seconds in listOf(1, 2, 5, 10, 30, 60)) for (fps in listOf(15, 24, 30)) {
+            val interval = seconds * 1_000L
+            assertEquals(interval - 123, CaptureTiming.nextDelayMillis(10_000, 10_123 + interval * 4, interval))
+            assertEquals(interval, CaptureTiming.nextDelayMillis(10_000, 10_000 + interval * 7, interval))
+            repeat(100) { index ->
+                assertEquals(index * 1_000_000L / fps, CaptureTiming.presentationTimeUs(index, fps))
+            }
+        }
+    }
+
+    @Test fun `lens policy blocks mismatches recovery and background without fallback`() {
+        for (lens in SessionLens.entries) {
+            assertEquals(lens, SessionLens.parse(lens.storedValue))
+            assertTrue(CapturePolicy.canCapture(lens, lens, true, false))
+            assertTrue(!CapturePolicy.canCapture(lens, null, true, false))
+            assertTrue(!CapturePolicy.canCapture(lens, SessionLens.entries.first { it != lens }, true, false))
+            assertTrue(!CapturePolicy.canCapture(lens, lens, false, false))
+            assertTrue(!CapturePolicy.canCapture(lens, lens, true, true))
+        }
+        assertTrue(CapturePolicy.canSelectLens(false, false, false))
+        assertTrue(!CapturePolicy.canSelectLens(true, false, false))
+        assertTrue(!CapturePolicy.canSelectLens(false, true, false))
+        assertTrue(!CapturePolicy.canSelectLens(false, false, true))
+    }
+
+    @Test fun `delayed camera provider callbacks cannot attach stale or unloaded lenses`() {
+        assertTrue(CapturePolicy.isCurrentBinding(2, 2, SessionLens.FRONT, SessionLens.FRONT, true, true))
+        assertTrue(!CapturePolicy.isCurrentBinding(1, 2, SessionLens.REAR, SessionLens.REAR, true, true))
+        assertTrue(!CapturePolicy.isCurrentBinding(2, 2, SessionLens.REAR, SessionLens.FRONT, true, true))
+        assertTrue(!CapturePolicy.isCurrentBinding(2, 2, SessionLens.FRONT, SessionLens.FRONT, false, true))
+        assertTrue(!CapturePolicy.isCurrentBinding(2, 2, SessionLens.FRONT, SessionLens.FRONT, true, false))
+    }
+
+    @Test fun `storage cutoff includes exactly fifty MiB`() {
+        assertTrue(!CapturePolicy.hasCaptureSpace(CapturePolicy.MIN_FREE_BYTES - 1))
+        assertTrue(CapturePolicy.hasCaptureSpace(CapturePolicy.MIN_FREE_BYTES))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `unknown lens is rejected`() { SessionLens.parse("sideways") }
+
     @Test(expected = IllegalArgumentException::class)
     fun `negative frame index is rejected`() { CaptureTiming.presentationTimeUs(-1, 30) }
 

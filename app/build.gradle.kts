@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.sinh.timelapse"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.sinh.timelapse"
-        minSdk = 29
-        targetSdk = 35
+        minSdk = 36
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

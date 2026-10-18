@@ -2,31 +2,33 @@
 
 Native Android app prototype: capture interval photos and export a portrait MP4 with the local capture clock (`HH:MM:SS`, 24-hour) burned into every frame.
 
-**Status: initial checkpoint, not release-ready.** Debug and instrumentation APKs compile and 11 unit tests pass. Lint currently fails on three API-30 window-inset calls despite minSdk 29; launching on Android 10 is unsafe until fixed. No device/emulator runtime testing has been performed. See [session handoff](docs/sessions/d-1044a6.md) and [follow-up work](docs/FOLLOW_UP.md).
+**Status: TTL-001 implementation, not release-ready.** Android **16+ (API 36)** is the intended support floor; minimum/compile/target SDK are 36. Fresh offline checks: debug and instrumentation APKs compile, **16 host tests pass**, and lint has **0 errors / 16 warnings**. The debug APK has been installed on the authorized Pixel 8 Pro without clearing data. Automated device tests are blocked by a missing offline Gradle UTP dependency; formal app UAT remains pending. Mandatory runtime validation is Pixel 8 Pro / GrapheneOS Android 17 / API 37; OPPO and API 36 runtime coverage remain deferred. See [current results and warning dispositions](docs/sessions/d-4582d3.md), [remaining work](docs/FOLLOW_UP.md), and the [historical prototype handoff](docs/sessions/d-1044a6.md). Android 10–15 compatibility is no longer in scope.
 
 ## Implemented
 
-- Rear-camera preview and capture using CameraX; intervals: 1, 2, 5, 10, 30, or 60 seconds.
+- Pre-session rear/front CameraX selection, fixed through pause/recovery until confirmed session deletion; intervals: 1, 2, 5, 10, 30, or 60 seconds.
+- Versioned lens metadata; legacy v1 sessions remain rear-only. Unsupported/malformed metadata blocks capture with a recovery error rather than hiding photos or selecting another session.
 - Timestamp at the **shutter request** in the session's original time zone. This is not sensor-exposure timing or elapsed video time.
-- EXIF orientation normalization, portrait center crop, readable lower-left timestamp burned into saved JPEG pixels.
+- EXIF orientation normalization, portrait center crop, front-scene reflection before burning a readable lower-left timestamp into JPEG pixels. CameraX handles front-preview mirroring; export does not mirror/stamp saved photos again.
 - Private, persistent session photos; resume capture, re-export, or explicitly delete photos/start a new session.
 - Surface-input H.264 encoder using MediaCodec + OpenGL ES and MediaMuxer; 720 × 1280, 15/24/30 fps, no audio.
-- Export through MediaStore to `Movies/TimestampTimelapse` without broad storage permissions.
+- Export through MediaStore to `Movies/TimestampTimelapse` without broad storage permissions. Durable attempt records reconcile only exact app-owned unfinished output; published videos and completed JPEGs are never recovery-cleanup targets.
+- Permission/unavailable-lens errors block capture without fallback, independently of saved-photo export. Ambiguous export ownership is retained/reported, not guessed.
 - Capture pauses when leaving the foreground; screen stays on while capturing/exporting.
 
 Example: at a 5-second capture interval and 30 fps, 300 photos represent approximately 25 minutes of real time in a 10-second video.
 
 ## Build
 
-Use Android Studio or a **full JDK 17** and Android SDK platform 35/build-tools 35.0.0. A minimal Java runtime is insufficient. Set `ANDROID_HOME` to your SDK (or configure `sdk.dir` in ignored `local.properties`).
+Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **35.0.0**, with the pinned Gradle/AGP/Kotlin and cached dependencies. A minimal Java runtime is insufficient. Set `JAVA_HOME` and `ANDROID_HOME` (or configure `sdk.dir` in ignored `local.properties`). TTL-001 checks use the exact approved host paths recorded in [current results](docs/sessions/d-4582d3.md); do not install/upgrade tools or fetch missing dependencies under the current offline-only decision.
 
 ```sh
-./gradlew :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
-# Currently fails until the API-29 compatibility issue is fixed:
-./gradlew :app:lintDebug
-# Requires an attached device/emulator with a surface-input H.264 encoder:
-./gradlew :app:connectedDebugAndroidTest
+./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:testDebugUnitTest :app:assembleDebug
+./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:assembleDebugAndroidTest
+./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:lintDebug
 ```
+
+These are implementation phase checks, not the independently approved full review matrix. Device tests require the approved explicit Pixel identity-selection wrapper and isolated install/test authorization; do not use an implicit device or substitute a direct instrumentation invocation to bypass the missing offline dependency.
 
 Local build artifacts (not committed):
 
@@ -35,11 +37,7 @@ Local build artifacts (not committed):
 - Unit test report: `app/build/reports/tests/testDebugUnitTest/index.html`
 - Lint report: `app/build/reports/lint-results-debug.html`
 
-Install the debug APK only on a test device after considering the known compatibility issue:
-
-```sh
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+APK installation and app UAT remain separately authorized, explicitly selected-device operations. Do not clear/uninstall app data, fill phone storage, or delete source photos/published videos as a test workaround.
 
 ## ADB development shell (TTL-002)
 
@@ -148,9 +146,9 @@ shell and discovery command work.
 
 ## Use
 
-Grant camera permission, select the interval/fps before starting, keep the app open and the phone steady, then stop capture and export. Exported videos remain in Gallery when session photos are deleted. Uninstalling/clearing app data removes private session photos.
+Grant camera permission and select **rear/front, interval and fps before starting**. Keep the app open and the phone steady, then stop capture and export. The session's camera/settings stay locked while paused or recovered; changing them requires confirmed Delete photos / New session (Cancel retains them). Camera permission is not needed to export valid saved photos. Exported videos remain in Gallery when session photos are deleted. Uninstalling/clearing app data removes private session photos.
 
-This is a foreground-only prototype, with one current session, portrait output, no background service, no raw-photo export, and no sensor-accurate clock calibration. Low storage stops capture, but export needs additional space for a temporary MP4 and its Gallery copy. Retain photos until export has been played back successfully. Device validation, Android-10 inset compatibility, UI polish/localization, lifecycle/storage failure tests, and release packaging remain outstanding.
+This is a foreground-only prototype, with one current session, portrait output, no background service, no raw-photo export, and no sensor-accurate clock calibration. Low storage stops capture, but export needs additional space for a temporary MP4 and its Gallery copy. Retain photos until export has been played back successfully. Device fixture execution, actual front/rear camera/lifecycle/permission tests, all six Pixel capture combinations, single-frame Gallery playback, independent review/CI and human UAT remain outstanding. New media/recovery fixtures compile but have not run. UI polish/localization and release packaging are deferred. On recovery errors, retain the app data and seek metadata/ownership inspection before retrying; never delete unknown files or media to unblock the app.
 
 ## Stack and source map
 
@@ -166,6 +164,6 @@ This is a foreground-only prototype, with one current session, portrait output, 
 
 ## Repository
 
-Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. The initial implementation has been merged into `main`; `develop` is synchronized from `main`. No remote has been created or pushed.
+Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. The selected TTL-001 feature checkout is based on `develop` at `b9aabdc` (including TTL-002). `main` is older. Sinh requested committing TTL-001 and integrating directly into `develop` as a per-ticket exception to the default main-targeted workflow below; `main` is not part of this integration. No remote action is part of TTL-001 implementation.
 
 Branch structure: **main → develop → feature**. Create feature branches from up-to-date `develop`, but target **`main` for all feature merges**, then fast-forward `develop` from `main`. See [branching strategy and commands](docs/BRANCHING.md).
