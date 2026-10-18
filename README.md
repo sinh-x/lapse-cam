@@ -41,6 +41,111 @@ Install the debug APK only on a test device after considering the known compatib
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## ADB development shell (TTL-002)
+
+This repo provides a pinned **ADB-only** Nix shell for **x86_64-linux** using
+nixpkgs `android-tools`. It does not provision the full Android SDK, JDK, Android
+Studio or emulator; the [build prerequisites](#build) above still apply.
+Application compatibility, front/rear capture and export validation belong to
+**TTL-001**. Discovering a phone does not validate the app or authorize installation.
+
+### Enter, check and exit
+
+Prerequisites: an existing Nix installation with store/daemon access and the
+`nix-command` and `flakes` experimental features. First entry may need network
+access to fetch the locked nixpkgs source and package closure from a binary cache
+(or build it). No host-specific SDK path is needed for `adb`.
+
+From the repository root, if those features are already enabled:
+
+```sh
+nix develop --no-update-lock-file --no-write-lock-file
+command -v adb  # Expected: /nix/store/.../bin/adb
+adb version
+adb devices -l
+exit
+```
+
+Otherwise enable the features for this invocation only:
+
+```sh
+nix --extra-experimental-features 'nix-command flakes' develop --no-update-lock-file --no-write-lock-file
+```
+
+For a one-shot check without an interactive shell:
+
+```sh
+nix --extra-experimental-features 'nix-command flakes' develop --no-update-lock-file --no-write-lock-file . --command adb version
+nix --extra-experimental-features 'nix-command flakes' develop --no-update-lock-file --no-write-lock-file . --command adb devices -l
+```
+
+`flake.lock` pins the input revision and NAR hash; do not update it to work around
+a failed check. Shell entry does not start ADB or alter host/device configuration.
+Running device discovery may start the ordinary user-level ADB server and create
+ADB keys/cache in your home directory. An empty list proves only command execution,
+not phone authorization or compatibility.
+
+### Authorize and select a physical phone
+
+Use a data-capable USB cable and port. On the phone, deliberately enable Developer
+options and ordinary USB debugging, unlock it, and accept the RSA trust prompt
+only for this trusted computer. Pixel 8 running GrapheneOS and OPPO Reno13 F 5G
+must each be checked separately. Do not unlock the bootloader, flash, disable
+GrapheneOS protections or install an APK for this tooling check.
+
+Inside the shell, list devices and identify the intended phone yourself. Never
+choose an arbitrary row when multiple phones or emulators are present. Replace
+the placeholder with that phone's actual listed serial:
+
+```sh
+adb devices -l
+export ANDROID_SERIAL='REPLACE_WITH_SELECTED_PHONE_SERIAL'
+adb -s "$ANDROID_SERIAL" get-state  # Must print exactly: device
+adb -s "$ANDROID_SERIAL" shell getprop ro.product.model
+adb -s "$ANDROID_SERIAL" shell getprop ro.build.version.release
+adb -s "$ANDROID_SERIAL" shell getprop ro.build.version.sdk
+adb -s "$ANDROID_SERIAL" shell getprop ro.build.display.id
+adb -s "$ANDROID_SERIAL" shell getprop ro.build.fingerprint
+unset ANDROID_SERIAL
+```
+
+Stop if the state is not `device`. Record actual nonempty property values and a
+numeric API level; never infer installed Android/API/build versions from a model
+name. Repeat with the other phone's explicit serial. Keep evidence locally and
+redact serials in shared reports; fingerprints can also identify installed builds.
+
+Operator record template (not executed results):
+
+| Phone | Date | Discovery/state | Actual model | Android release | API | Build display ID | Fingerprint | Result |
+|---|---|---|---|---|---|---|---|---|
+| Pixel 8 / GrapheneOS | — | Not checked | — | — | — | — | — | Pending |
+| OPPO Reno13 F 5G | — | Not checked | — | — | — | — | — | Pending |
+
+Both authorized physical-phone records are required before TTL-002 closure.
+Unavailable, unauthorized or offline hardware remains blocked UAT, even when the
+shell and discovery command work.
+
+### Troubleshooting boundaries
+
+- **Empty list:** check a known data-capable cable, another data port, phone unlock
+  and USB debugging. Re-run `adb devices -l`; no row is not a phone-test pass.
+- **`unauthorized`:** unlock the intended phone and deliberately accept its trust
+  prompt, then list again. Do not bypass authentication.
+- **`offline`:** check the cable/connection and phone state, then retry discovery.
+  If it persists, record the state and coordinate with the operator.
+- **`no permissions` / USB access errors:** the shell supplies tooling, not host
+  USB access. Stop and ask the operator; udev rules, groups, NixOS configuration,
+  `sudo` and other host-system changes require separate explicit approval. Do not
+  run ADB as root or change USB permissions as a workaround.
+- **Multiple devices:** identify the intended serial and use `adb -s` explicitly
+  for every query; do not rely on a default device.
+- **Competing ADB server/client versions:** record `adb version` and the error;
+  coordinate with Android Studio/other ADB workflow owners before any retry that
+  could replace their server. Do not automatically kill/restart a shared server.
+- **Missing inputs/cache/network:** retain the actual Nix failure, restore approved
+  network/cache access, then retry with the same lock. Do not substitute an
+  absolute SDK path or silently refresh the lock.
+
 ## Use
 
 Grant camera permission, select the interval/fps before starting, keep the app open and the phone steady, then stop capture and export. Exported videos remain in Gallery when session photos are deleted. Uninstalling/clearing app data removes private session photos.
