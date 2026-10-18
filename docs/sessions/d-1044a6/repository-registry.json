@@ -1,0 +1,8 @@
+{
+  "name": "timestamp-timelapse",
+  "path": "/home/sinh/git-repos/sinh/timestamp-timelapse",
+  "description": "Native Android interval photo capture with clock timestamp MP4 export",
+  "prefix": "TTL",
+  "mainBranch": "main",
+  "developBranch": "develop"
+}

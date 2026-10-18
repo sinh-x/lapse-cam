@@ -1,0 +1,51 @@
+{
+  "id": "TTL-001",
+  "project": "timestamp-timelapse",
+  "title": "Fix Android 10 compatibility and validate timestamp timelapse capture/export",
+  "summary": "Finish prototype from deployment d-1044a6: fix 3 API-29 lint errors, run device media tests and real capture/export smoke tests.",
+  "description": "Repository: /home/sinh/git-repos/sinh/timestamp-timelapse. Existing implementation branch: feature/no-ticket-android-timelapse develop and main contain only initialization. Read docs/FOLLOW_UP.md and docs/sessions/d-1044a6.md. Debug and instrumentation APKs compile 11 host tests pass. Lint fails with 3 NewApi errors at MainActivity.kt:113 (API-30 WindowInsets APIs under minSdk 29), plus 24 warnings. Preserve Android-10 support with compat insets or tested API guards, then run build/test/lint, MediaPipelineTest on supported hardware, single-frame export validation, and real camera lifecycle/storage/permission/Gallery playback tests. No device was attached and no human UAT has occurred. Retain session photos on failures, document results, and review before merging into develop. No remote exists yet.",
+  "status": "pending-implementation",
+  "priority": "high",
+  "type": "task",
+  "assignee": "sinh",
+  "estimate": "M",
+  "from": "",
+  "to": "",
+  "tags": [
+    "android",
+    "timelapse",
+    "follow-up"
+  ],
+  "blockedBy": [],
+  "doc_refs": [
+    {
+      "type": "attachment",
+      "path": "/home/sinh/git-repos/sinh/timestamp-timelapse/docs/FOLLOW_UP.md",
+      "primary": false,
+      "addedAt": "2026-10-18T04:50:22.931Z",
+      "addedBy": "sinh"
+    },
+    {
+      "type": "attachment",
+      "path": "/home/sinh/git-repos/sinh/timestamp-timelapse/docs/sessions/d-1044a6.md",
+      "primary": false,
+      "addedAt": "2026-10-18T04:50:23.883Z",
+      "addedBy": "sinh"
+    }
+  ],
+  "linkedBranches": [],
+  "linkedCommits": [],
+  "comments": [
+    {
+      "id": "c-20261018045105393",
+      "author": "sinh",
+      "content": "Handoff checkpoint committed in timestamp-timelapse: f82be2da23f51c877e540caa441fd2e08efec7b7 on feature/no-ticket-android-timelapse. README, docs/FOLLOW_UP.md and docs/sessions/d-1044a6.md include scope, build commands and known failures. Main/develop are not integrated yet. Original deployment d-1044a6 remains bound to pa-platform-config resume work in the new project.",
+      "timestamp": "2026-10-18T04:51:05.393Z"
+    }
+  ],
+  "subTickets": [],
+  "nextSubTicketCounter": 0,
+  "createdAt": "2026-10-18T04:49:28.931Z",
+  "updatedAt": "2026-10-18T04:51:05.393Z",
+  "resolvedAt": null
+}

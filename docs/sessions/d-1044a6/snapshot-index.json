@@ -1,0 +1,24 @@
+{
+  "capturedAt": "2026-10-18T11:51:41+07:00",
+  "deploymentId": "d-1044a6",
+  "implementationCommit": "f82be2da23f51c877e540caa441fd2e08efec7b7",
+  "implementationBranch": "feature/no-ticket-android-timelapse",
+  "followUpTicket": "TTL-001",
+  "project": "timestamp-timelapse",
+  "nativeSourceDirectory": "/home/sinh/Documents/ai-usage/deployments/d-1044a6",
+  "rawSnapshotDirectory": ".session-logs/d-1044a6",
+  "rawSnapshotsCommitted": false,
+  "registryStateAtSnapshot": "running",
+  "completionRequest": "partial, staged by native CLI for foreground Pi exit",
+  "notice": "Raw runtime files are point-in-time copies, not a complete transcript of later handoff/commit events. The native runtime directory remains authoritative.",
+  "sha256": {
+    "activity.jsonl": "6d7dc012aac6d06a9872b8da970bc67a2f4ab9838a49a105b9ad9aea73096660",
+    "deployment-tasks.json": "23b7162cfd5a5f4502c2085c799d69340164291509962d815c407ed085354d25",
+    "pi-foreground-completion.json": "9890b2ff2b3e082b3e1d7d12dd6a1b8250b8d4a2bb21af25632e95a74046362b",
+    "pi.log": "c703cda5a3c70c6693385c62eb7cbee85c28fb6b7aac1a75f8168c1c77cc54b6",
+    "pi-output.jsonl": "6087b8b5fd979bab168fe091d2dc1caec7b891fb6a43471d504691b13b324b45",
+    "pi-terminal-status.json": "4d9e3d83bf3f1185a4042a0b62a2468d75f0d828f1b47f271116af853d0b1295",
+    "primer.md": "2f16ce1c766e7026e868ae42d4f3c5e7b996e907158e2b8671b36b21da02225e",
+    "session-id-pi.txt": "f73e8cafe62ebc790b6fc2175a0128814b9127a4d9bc6e3c068349d08239bfd6"
+  }
+}
