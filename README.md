@@ -61,4 +61,4 @@ This is a foreground-only prototype, with one current session, portrait output, 
 
 ## Repository
 
-Local repository: `~/git-repos/sinh/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. Initial implementation is on `feature/no-ticket-android-timelapse`; `develop` and `main` remain at the initialization commit pending review. No remote has been created or pushed.
+Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. Initial implementation is on `feature/no-ticket-android-timelapse`; `develop` and `main` remain at the initialization commit pending review. No remote has been created or pushed.
