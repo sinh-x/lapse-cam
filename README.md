@@ -2,21 +2,25 @@
 
 Native Android app prototype: capture interval photos and export a portrait MP4 with the local capture clock (`HH:MM:SS`, 24-hour) burned into every frame.
 
-**Status: TTL-001 implementation, not release-ready.** Android **16+ (API 36)** is the intended support floor; minimum/compile/target SDK are 36. TTL-003 now verifies the instrumentation cache offline under an explicitly revised native-resolution procedure. Fresh host checks: **16 tests pass**, both APKs build, lint has **0 errors / 16 warnings**. Supplementary CPH2699/API36 instrumentation executed **16 tests: 14 passed, 2 failed**; new follow-up **TTL-010** owns these failures without reopening the TTL-001 implementation wrap-up. Mandatory Pixel 8 Pro / GrapheneOS API37 validation, independent review and formal UAT remain pending. See the [offline workflow, evidence and approval limitations](docs/OFFLINE_INSTRUMENTATION.md), [remaining work](docs/FOLLOW_UP.md), [prior implementation and warning dispositions](docs/sessions/d-4582d3.md), and [historical prototype handoff](docs/sessions/d-1044a6.md). Android 10–15 compatibility is no longer in scope.
+**Status: TTL-004 implementation candidate; review/UAT pending, not release-ready.** Android **16+ (API 36)**; minimum/compile/target SDK remain 36. Pre-rebase offline checks passed: **42 host tests**, both APK assemblies and lint (**0 errors / 24 warnings**). TTL-004's **31 device methods were compiled, not executed**; new candidate-bound results belong in [current follow-up](docs/FOLLOW_UP.md). TTL-003 verified the instrumentation cache offline under an explicitly revised native-resolution procedure. Its earlier supplementary CPH2699/API36 run executed **16 tests: 14 passed, 2 failed**, owned by **TTL-010**; these are not TTL-004 results or Pixel coverage. Mandatory Pixel 8 Pro / GrapheneOS API37 validation, independent review/CI and formal UAT remain pending. See the [offline workflow and approval limitations](docs/OFFLINE_INSTRUMENTATION.md), [warning dispositions and remaining work](docs/FOLLOW_UP.md), [historical TTL-001 results](docs/sessions/d-4582d3.md) and [prototype history](docs/sessions/d-1044a6.md). Android 10–15 compatibility is out of scope.
 
 ## Implemented
 
-- Pre-session rear/front CameraX selection, fixed through pause/recovery until confirmed session deletion; intervals: 1, 2, 5, 10, 30, or 60 seconds.
+- New sessions default to **Adaptive / 30-second maximum video / 30 fps**. Set an integer cap of **5–600 seconds**, at **15/24/30 fps**. The cap limits video, **not recording time or storage**.
+- Adaptive starts at a nominal **500 ms** cadence. At a frame-budget overflow, keep every other entry across the whole selected list plus the latest endpoint; double cadence up to 60 seconds. All completed JPEGs remain, including unselected photos. Sampling is approximate, not perfectly uniform; the camera is not guaranteed to achieve 2 fps.
+- **Fixed** mode preserves 1/2/5/10/30/60-second intervals with no video cap. Rear/front, mode/cap/fps, timestamp appearance and original time zone freeze per session.
+- Live HUD: active recording duration, wall-clock span, selected/total counts, saved bytes, video estimate, interval/stage and missed-slot indication. Active time excludes pauses; after interrupted recording, recovery is paused and labels last-saved timing with an unknown-tail warning. Legacy historical active time is unavailable.
+- Timestamp appearance panel: Monospace/Sans-serif/Serif, Regular/Bold, 32/44/60 output pixels, six positions and optional `yyyy-MM-dd` above `HH:mm:ss`. Defaults: 44 px bold monospace, bottom-left, date off. Preview and saved output share 720×1280 geometry, independent of UI font scale; saved photos cannot be restyled.
 - Versioned lens metadata; legacy v1 sessions remain rear-only. Unsupported/malformed metadata blocks capture with a recovery error rather than hiding photos or selecting another session.
 - Timestamp at the **shutter request** in the session's original time zone. This is not sensor-exposure timing or elapsed video time.
-- EXIF orientation normalization, portrait center crop, front-scene reflection before burning a readable lower-left timestamp into JPEG pixels. CameraX handles front-preview mirroring; export does not mirror/stamp saved photos again.
+- EXIF orientation normalization, portrait center crop, front-scene reflection before burning a readable timestamp into JPEG pixels. CameraX handles front-preview mirroring; export does not mirror/stamp saved photos again.
 - Private, persistent session photos; resume capture, re-export, or explicitly delete photos/start a new session.
 - Surface-input H.264 encoder using MediaCodec + OpenGL ES and MediaMuxer; 720 × 1280, 15/24/30 fps, no audio.
 - Export through MediaStore to `Movies/TimestampTimelapse` without broad storage permissions. Durable attempt records reconcile only exact app-owned unfinished output; published videos and completed JPEGs are never recovery-cleanup targets.
 - Permission/unavailable-lens errors block capture without fallback, independently of saved-photo export. Ambiguous export ownership is retained/reported, not guessed.
 - Capture pauses when leaving the foreground; screen stays on while capturing/exporting.
 
-Example: at a 5-second capture interval and 30 fps, 300 photos represent approximately 25 minutes of real time in a 10-second video.
+Adaptive example: 30s × 30fps gives a 900-frame budget. Photo 901 thins selection to 451 frames (about 15.033s), changes nominal cadence to 1 second, and retains all 901 JPEGs. The first boundary is roughly 7.5 minutes at achieved 2 fps, not a recording cutoff. Fixed example: 300 photos at a 5-second interval give approximately 25 minutes of capture in a 10-second/30fps clip.
 
 ## Build
 
@@ -146,9 +150,9 @@ shell and discovery command work.
 
 ## Use
 
-Grant camera permission and select **rear/front, interval and fps before starting**. Keep the app open and the phone steady, then stop capture and export. The session's camera/settings stay locked while paused or recovered; changing them requires confirmed Delete photos / New session (Cancel retains them). Camera permission is not needed to export valid saved photos. Exported videos remain in Gallery when session photos are deleted. Uninstalling/clearing app data removes private session photos.
+Grant camera permission and select **rear/front, Adaptive cap or Fixed interval, fps and timestamp appearance before starting**. Valid choices are remembered for later new sessions. Keep the app open and the phone steady, then stop capture and export. The session's camera/settings stay locked while paused or recovered; changing them requires confirmed Delete photos / New session (Cancel retains them). Camera permission is not needed to export valid saved photos. Exported videos remain in Gallery when session photos are deleted. Uninstalling/clearing app data removes private session photos.
 
-This is a foreground-only prototype, with one current session, portrait output, no background service, no raw-photo export, and no sensor-accurate clock calibration. Low storage stops capture, but export needs additional space for a temporary MP4 and its Gallery copy. Retain photos until export has been played back successfully. Mandatory Pixel fixture execution, actual front/rear camera/lifecycle/permission tests, all six Pixel capture combinations, single-frame Gallery playback, independent review/CI and human UAT remain outstanding. Supplementary API36 media/recovery fixtures ran with two failures; see the offline runbook for exact counts and the TTL-010 follow-up. UI polish/localization and release packaging are deferred. On recovery errors, retain the app data and seek metadata/ownership inspection before retrying; never delete unknown files or media to unblock the app.
+This is a foreground-only prototype, with one current session, portrait output, no background service, no raw-photo export, and no sensor-accurate clock calibration. Below 50 MiB free space, capture pauses before another shutter. Export checks 50 MiB plus twice the estimated MP4 size at 5 Mbps with 25% overhead; this is a headroom estimate, not a storage reservation. Insufficient headroom blocks export with photos retained for retry. Retain photos until export has been played back successfully. Mandatory Pixel fixture execution, actual front/rear camera/lifecycle/permission tests, all six Pixel capture combinations, single-frame Gallery playback, independent review/CI and human UAT remain outstanding. TTL-003's supplementary API36 media/recovery run had two failures; see the offline runbook and TTL-010 follow-up. New TTL-004 fixture results must be tied to the rebased candidate. UI polish/localization and release packaging are deferred. On recovery errors, retain the app data and seek metadata/ownership inspection before retrying; never delete unknown files or media to unblock the app.
 
 ## Stack and source map
 
@@ -157,13 +161,15 @@ This is a foreground-only prototype, with one current session, portrait output, 
 - Native Android views, Canvas, MediaCodec, GLES 2.0, MediaMuxer, MediaStore.
 - `MainActivity.kt`: UI, camera binding, permissions/lifecycle.
 - `CaptureViewModel.kt`: capture cadence and background worker/state.
-- `SessionStore.kt`: session metadata and atomic completed JPEGs.
-- `TimestampRenderer.kt`: image orientation/cropping/stamp.
+- `SessionStore.kt`: legacy/v3 metadata, durable frame intent/checkpoints, replay and retained atomic JPEGs; no full-history scans during steady saves.
+- `AdaptiveSampling.kt`: pure bounded whole-list selection and frozen sampling configuration.
+- `TimestampAppearance.kt`: frozen style values, monotonic active clock and checked export-space arithmetic.
+- `TimestampLayout.kt` / `TimestampRenderer.kt`: shared preview/output geometry and image orientation/cropping/stamp.
 - `VideoExporter.kt` / `CodecSurface.kt`: MP4 encoder and Gallery publication.
 - `CaptureTiming.kt`: clock formatting/cadence/presentation timestamps.
 
 ## Repository
 
-Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. The selected TTL-001 feature checkout is based on `develop` at `b9aabdc` (including TTL-002). `main` is older. Sinh requested committing TTL-001 and integrating directly into `develop` as a per-ticket exception to the default main-targeted workflow below; `main` is not part of this integration. No remote action is part of TTL-001 implementation.
+Local repository: `~/git-repos/sinh-x/timestamp-timelapse`. PA project key: `timestamp-timelapse`, ticket prefix `TTL`. The TTL-004 candidate is on `feature/TTL-004-adaptive-timestamp`, rebased onto `develop` at `170dda2` (including TTL-003), with the Phase 1 contract originally committed as `78b903d`. `main` is older. Sinh requested committing TTL-001 and integrating directly into `develop` as a per-ticket exception to the default main-targeted workflow below; `main` is not part of this integration. No remote action is part of TTL-001 implementation.
 
 Branch structure: **main → develop → feature**. Create feature branches from up-to-date `develop`, but target **`main` for all feature merges**, then fast-forward `develop` from `main`. See [branching strategy and commands](docs/BRANCHING.md).

@@ -7,6 +7,8 @@ import android.graphics.BitmapFactory
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.media.MediaExtractor
+import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Environment
@@ -23,6 +25,7 @@ class VideoExporter(
     private val context: Context,
     filesDirectory: File = context.filesDir,
     cacheDirectory: File = context.cacheDir,
+    private val availableBytes: (File) -> Long = { android.os.StatFs(it.path).availableBytes },
     private val checkpoint: (String) -> Unit = {},
 ) {
     private val attempts = File(filesDirectory, "export-attempts").apply { check(mkdirs() || isDirectory) }
@@ -54,14 +57,24 @@ class VideoExporter(
     }
 
     fun export(session: CaptureSession, frames: List<File>, onProgress: (Int) -> Unit): Uri = synchronized(exportLock) {
-        require(frames.isNotEmpty()) { "Capture at least one photo first" }
+        val selected = frames.toList()
+        require(selected.isNotEmpty()) { "Capture at least one photo first" }
+        val adaptive = session.configuration as? SamplingConfiguration.Adaptive
+        require(adaptive == null || selected.size <= adaptive.frameBudget) { "Selection exceeds video cap" }
+        require(selected.distinct().size == selected.size && selected.all { it.isFile && it.parentFile == session.directory }
+            && selected.zipWithNext().all { (first, second) -> first.name < second.name }) { "Invalid selected photos; retained" }
+        val headroom = ExportSpace.requiredBytes(selected.size.toLong(), session.fps)
+        check(availableBytes(cache) >= headroom && availableBytes(Environment.getExternalStorageDirectory()) >= headroom) {
+            "Insufficient export headroom. Photos retained; free space and retry"
+        }
         reconcile()
         var attempt = Attempt(UUID.randomUUID().toString())
         writeAttempt(attempt) // Durable identity BEFORE encoding or inserting any external output.
         val temporary = File(cache, "${attempt.id}.mp4")
         try {
             checkpoint("recorded")
-            encode(temporary, frames, session.fps, onProgress)
+            encode(temporary, selected, session.fps, onProgress)
+            validateEncoded(temporary, selected.size, session.fps, adaptive?.maxSeconds)
             checkpoint("encoded")
             val resolver = context.contentResolver
             val uri = checkNotNull(resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
@@ -151,6 +164,42 @@ class VideoExporter(
         check(!File(attempts, "${attempt.id}.json").exists() && !File(attempts, "${attempt.id}.json.bak").exists()) {
             "Could not remove export record"
         }
+    }
+
+    /** Reject a codec/container that cannot honor the contract BEFORE publishing its output. */
+    internal fun validateEncoded(output: File, count: Int, fps: Int, maxSeconds: Int? = null) {
+        require(count > 0 && fps in 1..30)
+        val expectedDuration = CaptureTiming.presentationTimeUs(count, fps)
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(output.path)
+            check(extractor.trackCount == 1) { "Unexpected video tracks" }
+            val format = extractor.getTrackFormat(0)
+            check(format.getString(MediaFormat.KEY_MIME) == MediaFormat.MIMETYPE_VIDEO_AVC &&
+                format.getInteger(MediaFormat.KEY_WIDTH) == VIDEO_WIDTH && format.getInteger(MediaFormat.KEY_HEIGHT) == VIDEO_HEIGHT)
+            val duration = format.getLong(MediaFormat.KEY_DURATION)
+            check(duration >= 0 && kotlin.math.abs(duration - expectedDuration) <= 1000 &&
+                (maxSeconds == null || duration <= maxSeconds * 1_000_000L)) { "Encoder did not honor video duration/cap; photos retained" }
+            extractor.selectTrack(0)
+            var samples = 0
+            var previous = -1L
+            while (extractor.sampleTime >= 0) {
+                val pts = extractor.sampleTime
+                check(samples < count && pts > previous &&
+                    kotlin.math.abs(pts - CaptureTiming.presentationTimeUs(samples, fps)) <= 1) { "Unexpected video timing" }
+                previous = pts
+                samples++
+                if (!extractor.advance()) break
+            }
+            check(samples == count) { "Unexpected encoded sample count" }
+        } finally { extractor.release() }
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(output.path)
+            val durationMillis = checkNotNull(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)).toLong()
+            check(kotlin.math.abs(durationMillis - count * 1000.0 / fps) <= 1.0 &&
+                (maxSeconds == null || durationMillis <= maxSeconds * 1000L)) { "Reported video duration/cap mismatch" }
+        } finally { retriever.release() }
     }
 
     internal fun encode(output: File, frames: List<File>, fps: Int, onProgress: (Int) -> Unit) {

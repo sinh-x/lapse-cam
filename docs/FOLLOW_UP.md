@@ -1,4 +1,102 @@
-# TTL-001: Android 16+ camera and media validation follow-up
+# TTL-004: implementation candidate → independent review / UAT
+
+## Initial handoff (d-e2d1fe, 2026-10-20; pre-rebase results)
+
+Implemented on the selected ticket worktree, **not merged, installed, released or accepted**:
+
+- Branch `feature/TTL-004-adaptive-timestamp`; approved base `d753424a7643993a3514626726e58030c48ea093`; existing Phase 1 commit `78b903ddcee1c341005d3d7b8a49b3943c3830ed` preserved.
+- Candidate is the commit containing this handoff; exact final SHA is recorded in the TTL-004 deployment/ticket handoff. Identify it with `git rev-parse HEAD`; review/UAT must bind that unchanged candidate, not the original Phase 1 SHA.
+- V3 sessions freeze sampling, cap/fps, lens, zone and appearance. V1/v2 readers and exact legacy timestamp geometry remain. Legacy capture uses cached counts/high water; its historical active time is explicitly unavailable.
+- Durable pre-shutter ID reservation and per-frame provenance precede atomic JPEG rename. One atomic progress checkpoint commits total count/bytes, selection/stage and known active time. Startup replays identifiable completed JPEGs once; contradictory/missing provenance blocks recovery without older-session fallback or completed-photo deletion. Incomplete camera/JPEG files are not selected. Per-frame intents are retained; storage is deliberately unbounded by the video cap.
+- Steady saves use cached metadata and bounded selection, not historical directory scans. Startup reconciles history; Fixed export scans once, Adaptive export resolves selected provenance only.
+- Monotonic active time advances before photos complete, excludes pause/background/export and is checkpointed periodically (5s), at frame commit and normal pause. Recovery is paused; a previously running checkpoint adds a durable unknown-interruption-tail warning, never downtime. Wall span is independently wall-clock based and clamped nonnegative.
+- Export snapshots the committed selection, checks cap/uniqueness/order/files and headroom, then verifies actual encoded track/sample count, PTS and reported duration/cap **before publication**. Existing exact-owned pending-output recovery remains intact; published media is never a cleanup target.
+- Scrollable controls/HUD, remembered new-session settings, frozen timestamp panel and shared output-space preview support the approved Adaptive/Fixed/style/date options. Camera/lifecycle safeguards remain; pause permits at most the already in-flight completion.
+
+### Phase checks actually executed
+
+Existing full JDK `/nix/store/04cqkgis3i4b0fm42h5s77i96dp9gmyg-openjdk-17.0.20+2`, SDK `/home/sinh/android-sdk-writable`, unchanged pinned dependencies, offline only:
+
+```sh
+JAVA_HOME=/nix/store/04cqkgis3i4b0fm42h5s77i96dp9gmyg-openjdk-17.0.20+2 \
+ANDROID_HOME=/home/sinh/android-sdk-writable \
+./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false \
+  :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --rerun-tasks
+```
+
+These are implementation-phase checks, **not execution of the independent six-command matrix**. Original command output/exits are in the deployment's native tool/activity transcript. The initial run and fresh reruns passed; no compiler/test/lint failure was hidden or repaired by changing tolerances, versions, permissions or runners.
+
+| Evidence | Actual result |
+|---|---|
+| `AdaptiveSamplingTest` | 14 host cases passed |
+| `CaptureTimingTest` | 22 host cases passed; original 16 host cases preserved |
+| `SessionContractTest` | 6 host cases passed: active/pause/recovery arithmetic, headroom limits/overflow, 216 style value combinations |
+| Fresh host XML total | **42 tests; 0 failures, 0 errors, 0 skipped** |
+| Debug + instrumentation APK | Both assemble successfully; this is compilation, not device execution |
+| Lint XML | **0 errors / 24 warnings**, unsuppressed; dispositions below are implementer proposals |
+| Device fixture source | Original `MediaPipelineTest` 16 methods unchanged; `AdaptiveSessionTest` 11 and `TimestampAppearanceTest` 4 added; **31 methods compiled, all unrun** |
+| Whitespace / configuration | `git diff --check` passes; no manifest, dependency, SDK, Nix/Gradle lock, runner or permission changes |
+| Independent review / matrix / CI | **Not run** |
+| Pixel installation / capture / app UAT | **Not performed** in d-e2d1fe; historical TTL-001 installation is not candidate evidence |
+
+Local fresh outputs: `app/build/test-results/testDebugUnitTest/TEST-*.xml`, `app/build/reports/tests/testDebugUnitTest/index.html`, `app/build/reports/lint-results-debug.xml` and `.html`, `app/build/outputs/apk/debug/app-debug.apk`, `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`. They are ignored build artifacts, not committed test evidence or browser observations.
+
+### Coverage added, runtime proof outstanding
+
+| Contract | Fixtures / review surface | Remaining proof |
+|---|---|---|
+| Caps/fps/boundaries, seven-day selection/gap/replay | Existing Phase 1 host suites | Independent rerun and physical achieved cadence |
+| Retention, exact thinning, no steady scans | AdaptiveSessionTest hashing/counting fixture | Execute fixture; observe actual device I/O/cadence |
+| Crash before/after reserve, intent, atomic checkpoint, JPEG rename and commit | AdaptiveSessionTest interruption/replay fixtures | Execute on Android AtomicFile/filesystem; deliberate abrupt-loss injection is not real process-kill proof |
+| Missing/unknown/contradictory metadata, frozen config and legacy behavior | AdaptiveSessionTest + unchanged MediaPipelineTest | Execute all device cases and lifecycle/reboot UAT |
+| 10min active / 5min pause / 10min active, slow in-flight camera | Pure clock plus fake-time live-model fixture | Host clock passed; Android model/HUD fixture unrun; actual display refresh/missed slots need measurement |
+| Space below/at threshold, overflow, export failure | Host arithmetic + isolated fake-space device fixtures | Host arithmetic passed; Android I/O/retry fixtures unrun; never fill real storage |
+| One/two/full/thinned output at 15/24/30fps, PTS/count/duration | AdaptiveSessionTest + original media tests; pre-publication validator | Real codec/container results and playback unrun |
+| All 216 safe layouts, legacy pixel equality, date/DST/zone, shared preview | TimestampAppearanceTest + original EXIF/lens fixtures | Execute raster/layout fixtures and actual preview-vs-photo/video comparison |
+| 360dp / 200% font scale / accessibility | Scrollable vertical native controls, multiline spinner values, non-live timer HUD | **Manual operability and TalkBack assessment pending**; not proven by assembly/lint |
+
+### Lint dispositions proposed for independent review
+
+| Warning ID | Count | Rationale / remaining debt |
+|---|---:|---|
+| GradleDependency | 2 | Existing approved dependency pins retained; no upgrade/download authorized |
+| LockedOrientationActivity + DiscouragedApi | 1 + 1 | Existing portrait 720×1280 capture contract; large-screen/rotation behavior still needs UAT |
+| DataExtractionRules | 1 | Existing `allowBackup=false` retained; device-transfer/backup policy remains baseline review debt |
+| UseKtx | 7 | Style suggestions only; explicit Android API calls retained without suppression or new dependencies |
+| SetTextI18n | 12 | English prototype/localization debt; numeric cap entry intentionally uses strict ASCII whole seconds. Accessibility/large-font UAT still required |
+
+Gradle also reports pre-existing deprecated features for Gradle 9 compatibility. No wrapper/plugin migration is part of TTL-004. These dispositions are **not independent warning acceptance**.
+
+### Required next actions — no automatic device or merge permission
+
+1. Reconcile supported PA reporting/review authority. One `pa_phase_report capture` attempt for this integration returned the protected-evidence stop (missing/insecure/unsupported/conflicting/uncertain evidence); no source/report reference was returned. No publish/settle, HTML delivery, browser/Obsidian observation or authority repair was attempted. This repository narrative is not canonical settlement. An attempted build-log redirection to the deployment artifact directory was also policy-blocked; subsequent builds ran directly with native tool-captured output, without bypassing that constraint.
+2. Independent exact-candidate source review and the approved six-command matrix remain required. Requirements: `agent-teams/requirements/artifacts/2026-10-20-ttl-004-adaptive-timestamp.md`; matrix authority `7839091177015bf99df5dc0e5c3e3d20bc05dbbe1f51fc7c4194f684409bb358`; approval `c-20261019192823150`. This document does not replace the matrix, its gates or tolerances.
+3. TTL-003 owns offline instrumentation provisioning. The newer develop integration now records cache readiness and supplementary failures owned by TTL-010 in the runbook/below; the original UTP cache failure remains historical. Initial TTL-004 results above predate that integration. Obtain fresh toolchain/isolated Pixel authorization before the prescribed wrapper/device command. Do not use an alternate runner, fetch dependencies, clear/uninstall valuable data or change security settings as a workaround.
+4. Run all 31 device methods with zero failures/errors/skips, then execute the approved companion UAT (`2026-10-20-ttl-004-adaptive-timestamp-uat.md`). Record candidate, actual model/API/build, achieved rate/save latency, counts, pause/recovery behavior, sample/PTS/duration and geometry measurements. Do not put serials in shared evidence.
+5. Obtain independent review/required CI and Sinh's human sign-off. TTL-001 acceptance debt remains separate; no merge/push/release, branch deletion or checkout return follows from this handoff.
+
+| Human UAT scenario | Current result |
+|---|---|
+| TS-1 configuration/defaults/Fixed | Pending |
+| TS-2 hierarchical selection/coverage | Pending |
+| TS-3 originals/counts | Pending |
+| TS-4 cadence/I/O | Pending |
+| TS-5 dual duration/video estimate | Pending |
+| TS-6 durable recovery/timing | Pending |
+| TS-7 capped MP4/re-export | Pending |
+| TS-8 storage/headroom/failures | Pending |
+| TS-9 timestamp controls/216 layouts | Pending |
+| TS-10 preview/output/lenses | Pending |
+| TS-11 date/zone/clock | Pending |
+| TS-12 frozen/legacy settings | Pending |
+| TS-13 lifecycle/ownership regressions | Pending |
+| TS-14 narrow-screen/accessibility | Pending |
+| TS-15 physical integrated capture | Pending |
+| TS-16 independent matrix/evidence | Pending |
+
+---
+
+# TTL-001: Android 16+ camera and media validation follow-up (historical debt retained)
 
 - Ticket: **TTL-001**; implementation branch: `feature/TTL-001-android16-camera-validation`.
 - Approved baseline: `b9aabdc2b125450576e39b673a3e0fdd87e0327f`.

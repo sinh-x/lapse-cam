@@ -16,7 +16,8 @@ import kotlin.math.roundToInt
 
 object TimestampRenderer {
     /** Normalize EXIF, crop, reflect the front scene once, then stamp unmirrored clock text. */
-    fun render(photo: File, epochMillis: Long, zoneId: String, lens: SessionLens = SessionLens.REAR): Bitmap {
+    fun render(photo: File, epochMillis: Long, zoneId: String, lens: SessionLens = SessionLens.REAR,
+        appearance: TimestampAppearance = TimestampAppearance()): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(photo.path, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Camera returned an unreadable photo" }
@@ -46,7 +47,7 @@ object TimestampRenderer {
                 canvas.drawBitmap(image, Rect(left, top, left + cropWidth, top + cropHeight),
                     Rect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT), Paint(Paint.FILTER_BITMAP_FLAG))
                 canvas.restore()
-                drawClock(canvas, CaptureTiming.timestamp(epochMillis, zoneId))
+                TimestampLayout.draw(canvas, epochMillis, zoneId, appearance)
             }
         } finally {
             if (oriented !== decoded) oriented?.recycle()
