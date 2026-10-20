@@ -1,6 +1,43 @@
 # TTL-004: implementation candidate → independent review / UAT
 
-## Rebase and connected-phone phase (2026-10-20)
+## OPPO follow-up: cleanup fixes and repeated-export validation (2026-10-20)
+
+Sinh authorized bounded encoder/fixture work on this TTL-004 branch, then explicitly corrected testing from Pixel to **OPPO/CPH2699**. Fresh identity checks before every device run: exactly one authorized CPH2699 / Android16 / API36 / buildCPH2699_16.0.5.1200(EX01). The Pixel was not tested or updated during this follow-up; it retains the earlier manual-UAT build installed on request. The reported foreground “all good” is informal manual feedback, not a completed16-scenario UAT record.
+
+Changes and observations, preserving the original failures:
+
+1. **2cc4868dc1da4727743ad5d09142fa6942bffb51**: fixed `ambiguousOwnershipAndCleanupFailureRetainRecordsForExplicitRetry` teardown. It intentionally deleted its row during the test, then deleted the now-absent URI again in `finally`. Android may reject that stale URI with `SecurityException`. Track successful removal, assert one affected row and absence, and do not delete it twice. Added bounded encoder diagnostic detail (codec, fps, submitted/encoded counts, config/EOS flags and last8 output timestamps); no encoder algorithm or tolerances changed.
+2. Focused run of the three previously failing methods: **2 passed / 1 failed**, exit1. Cleanup fixture and adaptive media passed. Interrupted-export test now surfaced the same double-delete pattern in its teardown (`MediaPipelineTest.kt:557` at that revision); the earlier cleanup exception could mask preceding loop results. This is retained evidence, not a hidden retry.
+3. **1d9153d03705ad9d0a3ea6fac391340f1bc08d90**: interrupted-export fixture now records exact allocated URI + UUID name. Teardown first checks the exact name; absent rows already removed by recovery are not deleted again. Present rows require matching URI and a delete constrained by exact name, app owner and expected path. No wildcard cleanup, broad permission or ownership-check weakening. All existing media assertions retained. Fresh full suite: **31/31 passed**, exit0.
+4. **c98ddb3c018b396c53fc534251241d9cce851153**, latest tested candidate: added `repeatedRapidExportsKeepExactFramesAcrossFpsCountsAndScenes`. It executes **48 exports**: black/asymmetric scenes ×15/24/30fps ×1/2/4/full5-second-budget frames ×2 repetitions. Every output passes strict sample/PTS/duration/cap validation and actual decoder frame count; source JPEG hashes remain unchanged. Full suite expanded to **32/32 passed**, exit0, exact source-method set matching fresh XML with no missing/duplicate/failed/error/skipped cases.
+
+**Encoder root cause remains unproven.** No frame-count or timing assertion was removed, no frame duplication/drop workaround, real-time sleep, codec substitution or format/pin change was introduced. The original encoder mismatch did not recur in the focused run, the31-method run or the48-export stress run. Passing these runs is current validation evidence, not proof that an intermittent encoder defect is resolved. Keep that part of TTL-010 open for an actual diagnostic reproduction if it recurs; new failures now include bounded codec/count/PTS evidence.
+
+Final candidate-bound checks:
+
+| Check | Actual outcome |
+|---|---|
+| Offline host/build/lint with `--rerun-tasks` | Exit0;42 host cases,0 failures/errors/skips; both APKs assembled; lint0 errors/24 warnings |
+| Full connected suite on exact CPH2699 | Exit0;32 methods: MediaPipeline17/17, AdaptiveSession11/11, TimestampAppearance4/4 |
+| Repeated rapid-export vectors | All48 executed; strict container timing/count and decoded counts pass; all JPEG hashes unchanged |
+| Installed OPPO app + test APK | Both retained; installed SHA-256 independently matches local tested outputs |
+| Pixel / independent matrix / CI / formal human UAT | Not run in this follow-up; separate gates remain pending |
+
+Latest APK SHA-256:
+- Debug: `e1478848586da03a31a81c9f5695ebeeda1e09606a646bed4f819c398b8034d6`.
+- AndroidTest: `9645514ade1d927b40bd2e2de4e92aaef31cee54e4d62ed679db59e050cab89a`.
+
+All device invocations used the same pinned offline connected runner, all named classes or the explicit3-method focus filter, SDK downloads disabled and **both** keep-installed/no-incompatible-uninstall properties. No app-data clear/uninstall, real capture, unrelated-media deletion, permission/security change, downloads or shared ADB restart. Cache-writer exclusion was confirmed in the foreground approval. Present APKs reflect c98ddb3; any following results-doc commit changes only documentation.
+
+Retained evidence (owner-only temp roots; preserve before any later authorized rerun):
+- Original failed31-method outputs + host XML/log: `/tmp/ttl004-before-oppo-fix.PHmXbE/`.
+- Focused2-pass/1-fail outputs: `/tmp/ttl004-oppo-diagnosis-results.XdNTcg/`; original log `/tmp/ttl004-oppo-diagnosis.ywiGHc.log`.
+- Full31/31 outputs: `/tmp/ttl004-oppo-31pass.dnUFnp/`; original log `/tmp/ttl004-oppo-full.sR8Djv.log`.
+- Latest32/32: worktree `app/build/outputs/androidTest-results/connected/debug/`, `app/build/reports/androidTests/connected/debug/index.html`; marker `app/build/reports/ttl004-oppo-stress-c98ddb3.txt`; original log `/tmp/ttl004-oppo-stress.LoA5f6.log`.
+
+Original serial-bearing files stay restricted; native displayed logs were serial-redacted. Temporary evidence is not durable publication: retain externally through the supported owner workflow before cleanup. PA canonical phase-report/publication reconciliation remains the pre-existing protected-evidence blocker, not waived by these results. No independent-review, full-matrix, release, merge or checkout-return acceptance is asserted.
+
+## Rebase and connected-phone phase (2026-10-20; earlier failing candidate)
 
 At Sinh's request, rebased the ticket worktree onto updated local `develop` at **170dda221be2018a32b83f1020d2723992a1c168** (TTL-003 tooling). No remote is configured/fetched. Rebase mapped Phase 1 `78b903d` → `ae3f4fc` and integration `9c5d36f` → **8787776621ec6a074ba768b41619c41d80a8ac20**. Only README content conflicted; resolution retained both TTL-003's actual cache/supplementary outcomes and TTL-004's behavior/status. App/test/build/flake/lock bytes are identical to the pre-rebase integration; TTL-003 helper/runbook are retained from develop.
 
