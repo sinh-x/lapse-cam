@@ -1,5 +1,48 @@
 # TTL-004: implementation candidate → independent review / UAT
 
+## Rebase and connected-phone phase (2026-10-20)
+
+At Sinh's request, rebased the ticket worktree onto updated local `develop` at **170dda221be2018a32b83f1020d2723992a1c168** (TTL-003 tooling). No remote is configured/fetched. Rebase mapped Phase 1 `78b903d` → `ae3f4fc` and integration `9c5d36f` → **8787776621ec6a074ba768b41619c41d80a8ac20**. Only README content conflicted; resolution retained both TTL-003's actual cache/supplementary outcomes and TTL-004's behavior/status. App/test/build/flake/lock bytes are identical to the pre-rebase integration; TTL-003 helper/runbook are retained from develop.
+
+**Tested runtime/source candidate: 8787776621ec6a074ba768b41619c41d80a8ac20.** Any following results-documentation commit changes only documentation, not the tested APK/source bytes. Fresh offline phase host command above/below with `--rerun-tasks`: **exit0, 42 host tests, 0 failures/errors/skips, both APKs assembled, lint0 errors/24 warnings**.
+
+Fresh read-only discovery found exactly one authorized **CPH2699 / Android16 / API36 / CPH2699_16.0.5.1200(EX01)**, not the mandatory Pixel. SDK and locked-Nix ADB clients/server all use protocol41/version37.0.0; no shared-server restart. Sinh selected **Run all 31 tests, then leave app installed**, confirming a disposable app context and stopped cache writers. This authorizes supplementary phase testing, not replacement of Pixel/matrix/UAT acceptance.
+
+Actual device invocation retained pinned offline Gradle/UTP and all three named classes:
+
+```text
+:app:connectedDebugAndroidTest --rerun-tasks
+-Pandroid.builder.sdkDownload=false
+-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+-Pandroid.experimental.testOptions.uninstallIncompatibleApks=false
+-Pandroid.testInstrumentationRunnerArguments.class=com.sinh.timelapse.MediaPipelineTest,com.sinh.timelapse.AdaptiveSessionTest,com.sinh.timelapse.TimestampAppearanceTest
+```
+
+The wrapper reasserted exact candidate, clean source inventory, single device/model/API/build and explicit selected serial (not printed) before Gradle. Connected-results/report directories were absent before the run; marker `app/build/reports/ttl004-device-start-8787776.txt` precedes fresh XML. A first command was rejected before execution because its redirected log target was dynamic; after creating a verified owner-only system-temp log, the actual Gradle/device invocation ran **once**. Original output retained at `/tmp/ttl004-device-8787776.GleOLs.log` (owner-only); serial-redacted output is in the deployment native transcript. Do not publish raw serial-bearing XML/log paths.
+
+| Device suite | Executed | Passed | Failed | Errors/skips |
+|---|---:|---:|---:|---:|
+| MediaPipelineTest (unchanged original methods) | 16 | 14 | 2 | 0/0 |
+| AdaptiveSessionTest | 11 | 10 | 1 | 0/0 |
+| TimestampAppearanceTest | 4 | 4 | 0 | 0/0 |
+| **Total** | **31** | **28** | **3** | **0/0** |
+
+Gradle exited **1** due to failed tests, not dependency resolution. Exact fresh XML method-set equality against all31 source methods, no duplicates/missing cases, was verified. A failed method stops its internal loop: do not claim every fps/count vector executed merely because all methods were discovered.
+
+Failures retained without suppression or automatic repair/retry:
+
+- `MediaPipelineTest.ambiguousOwnershipAndCleanupFailureRetainRecordsForExplicitRetry`: MediaStore `SecurityException` in fixture `finally` cleanup at line600. Reproduces the existing TTL-010 finding; a cleanup exception may mask an earlier fixture result.
+- `MediaPipelineTest.interruptedExportsCleanOnlyTheirPendingOutputsAndPreservePublishedVideos`: `Encoder produced an unexpected frame count` at `VideoExporter.kt:286`, called by test line550. Reproduces the existing TTL-010 symptom.
+- `AdaptiveSessionTest.adaptiveMediaUsesExactlyFrozenSelectionAtEveryFpsWithoutModifyingPhotos`: same encoder frame-count check at `VideoExporter.kt:286`, test line320. Newly exercised TTL-004 coverage; likely related path, **not a proven common root cause or a proven rebase regression**. Bounded encoder diagnosis/repair and candidate-bound rerun remain required.
+
+All four timestamp methods passed (216 safe layouts, legacy pixel equality, date/DST/frozen zone, shared preview geometry). Adaptive session recovery/retention/atomicity/counting/fake-time/storage tests passed; adaptive MP4 coverage remains failing. Application package presence was confirmed after the run; the updated app remains installed for hands-on testing. No app-data clear/uninstall, real capture, unrelated phone-media deletion, security change or shared ADB replacement was performed. Fixtures target isolated roots and exact self-created video URIs; no phone-wide preservation inventory or human playback/camera pass is inferred.
+
+Tested APK SHA-256:
+- Debug: `f18cf851634de9328518bab6294a67906b6b24ad91abd3a922b530225e58c26d`.
+- AndroidTest: `c1b9c2b402ece588e1c605062d8cbc0859810b82d67f58df7fc46a24e53e7ef8`.
+
+Local device report: `app/build/reports/androidTests/connected/debug/index.html`; original XML tree: `app/build/outputs/androidTest-results/connected/debug/`. Preserve failed outputs before any newly authorized rerun. Mandatory Pixel, actual both-lens capture/Gallery playback, full independent review/matrix/CI and human TS1–16 sign-off remain pending. TTL-003's original receipt pins pre-TTL-004 source/method sets and cannot be relabelled as this candidate's unchanged receipt or31-method result authority.
+
 ## Initial handoff (d-e2d1fe, 2026-10-20; pre-rebase results)
 
 Implemented on the selected ticket worktree, **not merged, installed, released or accepted**:
