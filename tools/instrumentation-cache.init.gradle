@@ -1,0 +1,479 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import javax.xml.parsers.DocumentBuilderFactory
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+
+// TTL-003: no HTTP client, repository override, cache editing or device API.
+// REVISED CONTRACT c-20261020120826780: native root/configuration-scoped resolution.
+// No public Gradle API can pre-authorize each URL/redirect or provide full network provenance.
+// Input hashes/references are integrity data, NOT owner permission. Online runs require
+// separate real owner approval of the exact input bytes before invoking Gradle.
+class TtlCacheChecks {
+    static void require(boolean ok, String why) {
+        if (!ok) throw new GradleException("TTL-003: ${why}")
+    }
+    static String hash(File file) {
+        def md = MessageDigest.getInstance('SHA-256')
+        file.withInputStream { input ->
+            byte[] buffer = new byte[65536]
+            int size
+            while ((size = input.read(buffer)) != -1) md.update(buffer, 0, size)
+        }
+        md.digest().encodeHex().toString()
+    }
+    static void offline(boolean value) { require(value, 'this operation requires --offline') }
+    static void graph(List paths) {
+        require(paths == [':app:ttlInstrumentationCache'], 'only the helper task may be requested/executed')
+    }
+    static void coverage(List names, List expected, Map roots, Map expectedRoots) {
+        require(!names.empty && !expected.empty, 'empty configuration selection')
+        require(names.containsAll(expected), "incomplete configuration selection: ${expected - names}")
+        expectedRoots.each { name, coordinate ->
+            require(roots[name]?.contains(coordinate) == true, "missing pinned UTP root ${name}: ${coordinate}")
+        }
+    }
+    static void scope(Map manifest, String schema) {
+        require(manifest.schemaVersion == schema, 'wrong/missing manifest schema')
+        require(manifest.approvalRefs instanceof List && !manifest.approvalRefs.empty &&
+            manifest.approvalRefs.every { it instanceof String && it.trim() }, 'missing approval references')
+        require(manifest.writerExclusionRef instanceof String && manifest.writerExclusionRef.trim(),
+            'missing writer-exclusion reference (data is not permission)')
+    }
+    static void exact(Object actual, Object expected, String label) {
+        require(actual == expected, "${label} differs from approved manifest")
+    }
+    static void repositories(Object sources) {
+        exact(sources, ['https://dl.google.com/dl/android/maven2/', 'https://repo.maven.apache.org/maven2/'],
+            'declared dependency repositories')
+    }
+    static def xml(File file) {
+        def factory = DocumentBuilderFactory.newInstance()
+        factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
+        factory.setFeature('http://xml.org/sax/features/external-general-entities', false)
+        factory.setFeature('http://xml.org/sax/features/external-parameter-entities', false)
+        factory.setXIncludeAware(false)
+        factory.setExpandEntityReferences(false)
+        factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, '')
+        factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_SCHEMA, '')
+        factory.newDocumentBuilder().parse(file)
+    }
+    static List methods(File source) {
+        def matcher = source.getText('UTF-8') =~ /(?s)@Test(?:\([^)]*\))?\s+fun\s+(?:`([^`]+)`|([A-Za-z0-9_]+))\s*\(/
+        def names = matcher.collect { it[1] ?: it[2] }.sort()
+        require(names.size() == 16 && names.unique(false).size() == 16, 'expected 16 distinct source test methods')
+        names
+    }
+    static void cases(List rows, List expected, String className) {
+        require(rows.size() == expected.size(), 'wrong XML case count')
+        require(rows.every { it.className == className && !it.failed && !it.skipped }, 'failed/skipped/wrong-class XML')
+        exact(rows.collect { it.name }.sort(), expected.sort(false), 'XML method set (including duplicates)')
+    }
+    static void fresh(long modified, long marker) {
+        require(modified > marker && marker > 0, 'stale/missing report or execution marker')
+    }
+    static Map tests(List files, File marker, List expected, String className) {
+        require(marker.isFile() && !files.empty, 'missing XML or marker')
+        def rows = []
+        files.each { file ->
+            fresh(file.lastModified(), marker.lastModified())
+            def doc = xml(file)
+            def suites = doc.getElementsByTagName('testsuite')
+            require(suites.length > 0, 'no XML test suites')
+            for (int i = 0; i < suites.length; i++) {
+                def suite = suites.item(i)
+                ['failures', 'errors', 'skipped'].each { key ->
+                    require(suite.getAttribute(key) == '0', 'nonzero/missing XML suite outcome')
+                }
+                require(suite.getAttribute('tests') == suite.getElementsByTagName('testcase').length.toString(),
+                    'XML suite count mismatch')
+            }
+            def nodes = doc.getElementsByTagName('testcase')
+            for (int i = 0; i < nodes.length; i++) {
+                def node = nodes.item(i)
+                rows << [name: node.getAttribute('name'), className: node.getAttribute('classname'),
+                    failed: node.getElementsByTagName('failure').length + node.getElementsByTagName('error').length > 0,
+                    skipped: node.getElementsByTagName('skipped').length > 0]
+            }
+        }
+        cases(rows, expected, className)
+        [tests: rows.size(), failures: 0, errors: 0, skipped: 0]
+    }
+}
+
+def check = TtlCacheChecks
+// These guards must run before settings/plugins are evaluated, not merely in doLast.
+def props = gradle.startParameter.projectProperties
+check.require(props.keySet().findAll { it.startsWith('ttlCache') }.every {
+    it in ['ttlCacheMode', 'ttlCacheReport', 'ttlCacheManifest', 'ttlCacheManifestSha256', 'ttlCacheApprovalRef']
+}, 'unknown ttlCache property')
+def mode = props.ttlCacheMode
+check.require(mode in ['inventory', 'metadata', 'provision', 'verify', 'selftest', 'results'], 'missing/unknown ttlCacheMode')
+check.graph(gradle.startParameter.taskNames)
+check.require(!gradle.startParameter.refreshDependencies, '--refresh-dependencies is forbidden')
+check.require(!gradle.startParameter.dryRun && gradle.startParameter.excludedTaskNames.empty,
+    'dry-run and excluded tasks cannot produce validation evidence')
+check.require(props['android.builder.sdkDownload'] == 'false', 'require -Pandroid.builder.sdkDownload=false')
+check.require(gradle.gradleVersion == '8.14', 'requires pinned Gradle 8.14')
+check.require(gradle.gradleUserHomeDir.canonicalPath == '/home/sinh/.gradle', 'unexpected Gradle user home')
+check.require(!System.getenv('GRADLE_USER_HOME') || System.getenv('GRADLE_USER_HOME') == '/home/sinh/.gradle',
+    'overriding GRADLE_USER_HOME')
+check.require(gradle.startParameter.initScripts.size() == 1, 'additional init scripts are not allowed')
+check.require(!new File(gradle.gradleUserHomeDir, 'init.gradle').exists() &&
+    !new File(gradle.gradleUserHomeDir, 'init.gradle.kts').exists() &&
+    (!new File(gradle.gradleUserHomeDir, 'init.d').exists() ||
+        !new File(gradle.gradleUserHomeDir, 'init.d').listFiles().any { it.name.endsWith('.gradle') || it.name.endsWith('.gradle.kts') }),
+    'user init scripts require separate review')
+def online = mode in ['metadata', 'provision']
+if (!online) check.offline(gradle.startParameter.offline)
+check.require(props.ttlCacheReport?.trim() as boolean, 'missing ttlCacheReport')
+check.require(!(mode in ['metadata', 'provision', 'verify', 'results']) || props.ttlCacheManifest?.trim(), 'missing ttlCacheManifest')
+check.require(!(mode in ['inventory', 'selftest']) || !props.ttlCacheManifest, 'manifest not used by this mode')
+def inputManifestFile = props.ttlCacheManifest ? new File(props.ttlCacheManifest).absoluteFile : null
+def inputManifest = null
+if (inputManifestFile) {
+    check.require(inputManifestFile.isFile(), 'manifest does not exist (use an absolute path)')
+    inputManifest = new JsonSlurper().parse(inputManifestFile, 'UTF-8')
+}
+if (online) {
+    check.require(props.ttlCacheManifestSha256 ==~ /[0-9a-f]{64}/, 'missing exact input manifest hash')
+    check.exact(check.hash(inputManifestFile), props.ttlCacheManifestSha256, 'raw input manifest SHA-256')
+    check.require(props.ttlCacheApprovalRef?.trim() as boolean, 'missing external owner approval reference')
+    check.scope(inputManifest, mode == 'metadata' ? 'ttl-cache-native-scope/v1' : 'ttl-cache-native-retrieval/v1')
+    check.require(inputManifest.nativeLimitationsAccepted == true,
+        'native URL/redirect/provenance limitations must be explicitly accepted')
+    check.repositories(inputManifest.declaredRepositories)
+    check.require(inputManifest.sourceFiles instanceof Map && !inputManifest.sourceFiles.empty, 'missing source pins')
+    inputManifest.sourceFiles.each { path, digest ->
+        def file = new File(gradle.startParameter.currentDir, path)
+        check.require(!new File(path).absolute && !path.tokenize('/').contains('..') && file.isFile(), 'invalid source pin path')
+        check.exact(check.hash(file), digest, 'init-time source-file digest')
+    }
+}
+
+gradle.taskGraph.whenReady { graph -> check.graph(graph.allTasks.collect { it.path }) }
+gradle.projectsEvaluated {
+    def app = gradle.rootProject.findProject(':app')
+    check.require(app != null, 'missing :app')
+    def root = gradle.rootProject.rootDir
+    def reportFile = gradle.rootProject.file(props.ttlCacheReport)
+    check.require(!reportFile.exists(), 'report already exists; retain it and select a new absent path')
+    def sourcePaths = ['build.gradle.kts', 'settings.gradle.kts', 'gradle.properties',
+        'gradle/wrapper/gradle-wrapper.properties', 'gradle/wrapper/gradle-wrapper.jar', 'gradlew', 'gradlew.bat',
+        'flake.nix', 'flake.lock', 'app/build.gradle.kts', 'tools/instrumentation-cache.init.gradle']
+    ['app/src/main', 'app/src/test', 'app/src/androidTest'].each { path ->
+        new File(root, path).eachFileRecurse { file ->
+            if (file.isFile()) sourcePaths << root.toPath().relativize(file.toPath()).toString()
+        }
+    }
+    def sourceFiles = sourcePaths.sort().collectEntries { path -> [(path): check.hash(new File(root, path))] }
+    def writeReport = { Map report ->
+        reportFile.parentFile.mkdirs()
+        Files.writeString(reportFile.toPath(), JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n',
+            StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+        app.logger.lifecycle("TTL-003 report SHA-256: ${check.hash(reportFile)}")
+    }
+    if (online) check.exact(inputManifest.sourceFiles, sourceFiles, 'pre-resolution source-file digests')
+    def cacheState = {
+        def files = [:]
+        def directory = new File(gradle.gradleUserHomeDir, 'caches/modules-2/files-2.1')
+        directory.eachFileRecurse { file ->
+            if (file.isFile()) files[file.canonicalPath] = [bytes: file.length(), sha256: check.hash(file)]
+        }
+        files.sort()
+    }
+    def graphOnly = { Map snapshot ->
+        snapshot.configurations.collect { [name: it.name, roots: it.roots, edges: it.edges] }
+    }
+    // Kotlin/AGP beforeResolve hooks may add dependencies while resolving. Freeze the
+    // declared roots once per invocation; effective injected dependencies remain in
+    // the separately approved complete graph, checked again before binary access.
+    def declaredRoots = null
+    def guardedConfigurations = [] as Set
+    def inventory = { boolean binaries ->
+        // Realize the definition only. Never walk dependencies of or schedule this task.
+        app.tasks.named('connectedDebugAndroidTest').get()
+        def plugin = app.plugins.findPlugin('com.android.application')
+        def utpClass = plugin.class.classLoader.loadClass('com.android.build.gradle.internal.testing.utp.UtpDependency')
+        def utpRoots = utpClass.enumConstants.collectEntries {
+            [(it.configurationName.toString()): it.mavenCoordinate().toString()]
+        }
+        def expected = (['debugAndroidTestCompileClasspath', 'debugAndroidTestRuntimeClasspath'] + utpRoots.keySet()).sort()
+        def configs = app.configurations.findAll { config ->
+            config.canBeResolved && ((config.name.startsWith('debugAndroidTest') && config.name.endsWith('Classpath')) ||
+                config.name.startsWith('_internal-unified-test-platform-'))
+        }.sort { it.name }
+        if (declaredRoots == null) {
+            declaredRoots = configs.collectEntries { config -> [(config.name): config.allDependencies.collect {
+                "${it.group}:${it.name}:${it.version}".toString()
+            }.sort()] }
+        }
+        def roots = declaredRoots
+        check.coverage(configs.collect { it.name }, expected, roots, utpRoots)
+        check.require(utpRoots.values().contains('com.android.tools.utp:android-test-plugin-host-additional-test-output:31.11.1'),
+            'pinned known UTP root not represented')
+        if (online) {
+            check.exact(configs.collect { it.name }, inputManifest.configurationNames, 'selected configuration names')
+            check.exact(roots, inputManifest.roots, 'selected pinned roots')
+        }
+        configs.each { config ->
+            if (guardedConfigurations.add(config.name)) {
+            config.resolutionStrategy.failOnDynamicVersions()
+            config.resolutionStrategy.failOnChangingVersions()
+            config.resolutionStrategy.eachDependency { details ->
+                def version = details.requested.version
+                check.require(!version || !(version =~ /(?i)(\+|latest[.]|[\[\](),]|-SNAPSHOT)/).find(), 'dynamic/changing selector refused')
+            }
+            }
+        }
+        def snapshots = configs.collect { config ->
+            def edges = []
+            def missing = []
+            def artifacts = []
+            try {
+                config.incoming.resolutionResult.allDependencies.each { dep ->
+                    def edge = [from: dep.from.id.displayName, requested: dep.requested.displayName]
+                    if (dep instanceof ResolvedDependencyResult) edge.selected = dep.selected.id.displayName
+                    else if (dep instanceof UnresolvedDependencyResult) {
+                        edge.failure = dep.failure.message
+                        missing << [kind: 'metadata', requested: dep.requested.displayName, failure: dep.failure.message]
+                    } else throw new GradleException('unknown dependency edge type')
+                    edges << edge
+                }
+                // Project outputs are build products, not downloadable cache dependencies.
+                // Retain their graph edges, but resolve only external module files here.
+                if (binaries) {
+                if (mode == 'provision') {
+                    check.exact([name: config.name, roots: roots[config.name], edges: edges.sort { JsonOutput.toJson(it) }],
+                        inputManifest.graph.find { it.name == config.name }, 'per-configuration artifact graph')
+                }
+                def resolved = config.incoming.artifactView {
+                    it.lenient(true)
+                    it.componentFilter { id -> id instanceof ModuleComponentIdentifier }
+                }.artifacts
+                resolved.artifacts.each { artifact ->
+                    def file = artifact.file
+                    artifacts << [component: artifact.id.componentIdentifier.displayName,
+                        artifact: artifact.id.displayName, name: file.name, bytes: file.length(),
+                        sha256: check.hash(file), cachePath: file.canonicalPath]
+                }
+                resolved.failures.each { failure -> missing << [kind: 'artifact', failure: failure.message] }
+                }
+            } catch (Exception failure) {
+                missing << [kind: 'resolution', failure: failure.message]
+            }
+            [name: config.name, roots: roots[config.name],
+                edges: edges.sort { JsonOutput.toJson(it) },
+                artifacts: artifacts.sort { it.artifact }, missing: missing,
+                complete: missing.empty]
+        }
+        [selectionComplete: true, expectedConfigurations: expected, sourceFiles: sourceFiles,
+            configurations: snapshots, complete: snapshots.every { it.complete }]
+    }
+    def verify = { Map receipt, Map current ->
+        check.scope(receipt, 'ttl-cache-native-receipt/v1')
+        check.require(receipt.nativeLimitationsAccepted == true && receipt.networkProvenanceComplete == false,
+            'receipt must disclose native provenance limitations')
+        check.exact(receipt.sourceFiles, sourceFiles, 'source-file digests')
+        check.require(receipt.complete == true && current.complete == true, 'incomplete dependency closure')
+        check.exact(current.expectedConfigurations, receipt.expectedConfigurations, 'configuration scope')
+        check.exact(current.configurations, receipt.configurations, 'roots/graph/artifacts/digests')
+        check.require(receipt.inputManifestHashes instanceof Map &&
+            ['metadata', 'retrieval'].every { receipt.inputManifestHashes[it] ==~ /[0-9a-f]{64}/ }, 'missing input manifest hashes')
+        check.require(receipt.cacheFiles instanceof Map && !receipt.cacheFiles.empty, 'missing cache-file integrity inventory')
+        current.configurations.collectMany { it.artifacts }.each { artifact ->
+            def file = new File(artifact.cachePath)
+            check.require(file.canonicalPath.startsWith(gradle.gradleUserHomeDir.canonicalPath + '/caches/'), 'non-cache artifact path')
+            check.exact(receipt.cacheFiles[artifact.cachePath], [bytes: artifact.bytes, sha256: artifact.sha256],
+                'artifact integrity inventory')
+        }
+        receipt.cacheFiles.each { path, entry ->
+            def file = new File(path)
+            check.require(file.canonicalPath.startsWith(gradle.gradleUserHomeDir.canonicalPath + '/caches/modules-2/files-2.1/'),
+                'non-module-cache integrity path')
+            check.require(file.isFile() && file.length() == entry.bytes && check.hash(file) == entry.sha256,
+                'missing or hash-mismatched cache file')
+        }
+    }
+    app.tasks.register('ttlInstrumentationCache') { task ->
+        task.group = 'verification'
+        task.description = 'Offline-only TTL-003 inventory, verification, selftests and fresh XML inspection'
+        task.doLast {
+            def report = [schemaVersion: 'ttl-cache-report/v1', mode: mode,
+                runId: UUID.randomUUID().toString(), startedAt: java.time.Instant.now().toString(),
+                sourceFiles: sourceFiles, offline: gradle.startParameter.offline, status: 'failed',
+                contract: 'native-root-scoped-revision', networkProvenanceComplete: false,
+                strictOriginalContractSatisfied: false]
+            def beforeCache = online ? cacheState() : null
+            try {
+                if (mode == 'selftest') {
+                    def outcomes = []
+                    def rejects = { Closure action ->
+                        boolean refused = false
+                        try { action() } catch (GradleException expected) { refused = true }
+                        check.require(refused, 'negative fixture was incorrectly accepted')
+                    }
+                    def test = { String name, Closure action ->
+                        action()
+                        outcomes << [name: name, passed: true]
+                    }
+                    test('empty/incomplete configuration selection rejected') {
+                        rejects { check.coverage([], ['debugAndroidTestRuntimeClasspath'], [:], [:]) }
+                        rejects { check.coverage(['utp'], ['utp', 'runtime'], [:], [:]) }
+                    }
+                    test('known UTP coordinate/version coverage enforced') {
+                        check.coverage(['utp'], ['utp'], [utp: ['g:a:31.11.1']], [utp: 'g:a:31.11.1'])
+                        rejects { check.coverage(['utp'], ['utp'], [utp: ['g:a:other']], [utp: 'g:a:31.11.1']) }
+                    }
+                    test('missing manifest/approval rejected') {
+                        rejects { check.scope([:], 'ttl-cache-manifest/v1') }
+                        rejects { check.scope([schemaVersion: 'ttl-cache-manifest/v1', approvalRefs: []], 'ttl-cache-manifest/v1') }
+                    }
+                    test('unexpected coordinate/version rejected') {
+                        rejects { check.exact(['g:a:2'], ['g:a:1'], 'graph') }
+                        rejects { check.exact(['g:b:1'], ['g:a:1'], 'graph') }
+                    }
+                    test('declared repository drift rejected; redirect enforcement unavailable') {
+                        check.repositories(['https://dl.google.com/dl/android/maven2/', 'https://repo.maven.apache.org/maven2/'])
+                        rejects { check.repositories(['https://evil.invalid/']) }
+                        rejects { check.repositories(['https://dl.google.com/dl/android/maven2/']) }
+                    }
+                    test('offline requirement enforced') { check.offline(true); rejects { check.offline(false) } }
+                    test('connected/install/mixed task graph rejected') {
+                        check.graph([':app:ttlInstrumentationCache'])
+                        [':app:connectedDebugAndroidTest', ':app:installDebug', ':app:help'].each { path ->
+                            rejects { check.graph([':app:ttlInstrumentationCache', path]) }
+                        }
+                    }
+                    test('stale/failed/skipped/duplicate XML rejected') {
+                        // Real parser plus production freshness/method validators; only local synthetic files.
+                        def fixture = new File(task.temporaryDir, UUID.randomUUID().toString())
+                        check.require(fixture.mkdirs(), 'cannot create isolated XML fixture')
+                        def marker = new File(fixture, 'start')
+                        def xmlFile = new File(fixture, 'TEST-fixture.xml')
+                        Files.writeString(marker.toPath(), '', StandardOpenOption.CREATE_NEW)
+                        marker.setLastModified(1000)
+                        def sample = { String body, String failures = '0', String skipped = '0' ->
+                            xmlFile.setText('<testsuite tests="2" failures="' + failures + '" errors="0" skipped="' + skipped + '">' + body + '</testsuite>', 'UTF-8')
+                            xmlFile.setLastModified(2000)
+                        }
+                        def one = '<testcase name="one" classname="Test"/>'
+                        def two = '<testcase name="two" classname="Test"/>'
+                        sample(one + two)
+                        check.tests([xmlFile], marker, ['one', 'two'], 'Test')
+                        xmlFile.setLastModified(1000)
+                        rejects { check.tests([xmlFile], marker, ['one', 'two'], 'Test') }
+                        sample(one + one)
+                        rejects { check.tests([xmlFile], marker, ['one', 'two'], 'Test') }
+                        sample('<testcase name="one" classname="Test"><failure/></testcase>' + two, '1')
+                        rejects { check.tests([xmlFile], marker, ['one', 'two'], 'Test') }
+                        sample('<testcase name="one" classname="Test"><skipped/></testcase>' + two, '0', '1')
+                        rejects { check.tests([xmlFile], marker, ['one', 'two'], 'Test') }
+                        sample(one + two)
+                        rejects { check.tests([xmlFile, xmlFile], marker, ['one', 'two'], 'Test') }
+                        check.methods(new File(root, 'app/src/test/java/com/sinh/timelapse/CaptureTimingTest.kt'))
+                        check.methods(new File(root, 'app/src/androidTest/java/com/sinh/timelapse/MediaPipelineTest.kt'))
+                    }
+                    report.selftest = [tests: 8, failures: 0, errors: 0, skipped: 0, cases: outcomes]
+                } else {
+                    def current = inventory(false)
+                    report.inventory = current
+                    if (mode != 'inventory') check.require(current.complete == true,
+                        'offline/metadata closure incomplete; missing edges retained in report')
+                    if (mode == 'provision') {
+                        // Re-resolve metadata and compare the whole approved graph BEFORE requesting binaries.
+                        check.exact(graphOnly(current), inputManifest.graph, 'approved metadata graph')
+                    }
+                    if (mode != 'metadata') {
+                        current = inventory(true)
+                        report.inventory = current
+                        check.require(current.complete == true, 'offline/artifact closure incomplete; missing artifacts retained in report')
+                    }
+                    if (mode == 'metadata') {
+                        report.candidateRetrievalManifest = [schemaVersion: 'ttl-cache-native-retrieval/v1',
+                            sourceFiles: sourceFiles, configurationNames: current.configurations.collect { it.name },
+                            roots: current.configurations.collectEntries { [(it.name): it.roots] },
+                            graph: graphOnly(current), nativeLimitationsAccepted: true,
+                            declaredRepositories: inputManifest.declaredRepositories,
+                            metadataScopeSha256: check.hash(inputManifestFile),
+                            approvalRefs: inputManifest.approvalRefs + [props.ttlCacheApprovalRef],
+                            writerExclusionRef: inputManifest.writerExclusionRef]
+                    }
+                    if (mode == 'provision') {
+                        def afterCache = cacheState()
+                        report.candidateReceipt = [schemaVersion: 'ttl-cache-native-receipt/v1',
+                            sourceFiles: sourceFiles, configurations: current.configurations,
+                            expectedConfigurations: current.expectedConfigurations, complete: current.complete,
+                            nativeLimitationsAccepted: true, networkProvenanceComplete: false,
+                            declaredRepositories: inputManifest.declaredRepositories,
+                            approvalRefs: inputManifest.approvalRefs + [props.ttlCacheApprovalRef],
+                            writerExclusionRef: inputManifest.writerExclusionRef,
+                            inputManifestHashes: [metadata: inputManifest.metadataScopeSha256, retrieval: check.hash(inputManifestFile)],
+                            cacheFiles: afterCache]
+                    }
+                    if (mode in ['verify', 'results']) {
+                        verify(inputManifest, current)
+                        report.manifestSha256 = check.hash(inputManifestFile)
+                        if (mode == 'results') {
+                            def hostMarker = new File(app.buildDir, 'reports/ttl-cache/host-start')
+                            def deviceMarker = new File(app.buildDir, 'reports/ttl-cache/device-start')
+                            def hostFiles = app.fileTree(new File(app.buildDir, 'test-results/testDebugUnitTest')) { include '**/TEST-*.xml' }.files.toList()
+                            def deviceFiles = app.fileTree(new File(app.buildDir, 'outputs/androidTest-results/connected/debug')) { include '**/TEST-*.xml' }.files.toList()
+                            report.host = check.tests(hostFiles, hostMarker,
+                                check.methods(new File(root, 'app/src/test/java/com/sinh/timelapse/CaptureTimingTest.kt')),
+                                'com.sinh.timelapse.CaptureTimingTest')
+                            report.device = check.tests(deviceFiles, deviceMarker,
+                                check.methods(new File(root, 'app/src/androidTest/java/com/sinh/timelapse/MediaPipelineTest.kt')),
+                                'com.sinh.timelapse.MediaPipelineTest')
+                            def lintFile = new File(app.buildDir, 'reports/lint-results-debug.xml')
+                            check.require(lintFile.isFile(), 'missing lint XML')
+                            check.fresh(lintFile.lastModified(), hostMarker.lastModified())
+                            def issues = check.xml(lintFile).getElementsByTagName('issue')
+                            int warnings = 0
+                            for (int i = 0; i < issues.length; i++) {
+                                def severity = issues.item(i).getAttribute('severity')
+                                check.require(!(severity in ['Error', 'Fatal']), 'lint errors')
+                                if (severity == 'Warning') warnings++
+                            }
+                            report.lint = [errors: 0, warnings: warnings, sha256: check.hash(lintFile)]
+                            report.apks = ['outputs/apk/debug/app-debug.apk',
+                                'outputs/apk/androidTest/debug/app-debug-androidTest.apk'].collect { path ->
+                                def file = new File(app.buildDir, path)
+                                check.require(file.isFile(), 'missing APK')
+                                check.fresh(file.lastModified(), hostMarker.lastModified())
+                                [path: path, bytes: file.length(), sha256: check.hash(file)]
+                            }
+                            // Never publish device XML paths, properties or raw output (may contain serials).
+                            report.xmlSha256 = [host: hostFiles.collect { check.hash(it) }.sort(),
+                                device: deviceFiles.collect { check.hash(it) }.sort()]
+                        }
+                    }
+                }
+                report.status = 'passed'
+            } catch (Exception failure) {
+                // XML parser errors may include restricted device paths; keep results failures generic.
+                report.failure = mode == 'results' ? 'Results validation failed; inspect restricted originals locally' : failure.message
+                throw new GradleException(report.failure)
+            } finally {
+                if (online) {
+                    def afterCache = cacheState()
+                    report.cacheBefore = beforeCache
+                    report.cacheAfter = afterCache
+                    report.cacheDelta = afterCache.findAll { path, entry -> beforeCache[path] != entry }
+                    report.inputManifestSha256 = check.hash(inputManifestFile)
+                    report.approvalRef = props.ttlCacheApprovalRef
+                    report.requestedUrls = null
+                    report.finalUrls = null
+                    report.redirects = null
+                    report.provenanceNote = 'Native Gradle does not expose complete request/redirect/metadata provenance; declared repositories are not observed origins. Cache hashes track integrity, not independent authenticity.'
+                }
+                report.finishedAt = java.time.Instant.now().toString()
+                writeReport(report)
+            }
+        }
+    }
+}

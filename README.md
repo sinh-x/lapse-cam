@@ -2,7 +2,7 @@
 
 Native Android app prototype: capture interval photos and export a portrait MP4 with the local capture clock (`HH:MM:SS`, 24-hour) burned into every frame.
 
-**Status: TTL-001 implementation, not release-ready.** Android **16+ (API 36)** is the intended support floor; minimum/compile/target SDK are 36. Fresh offline checks: debug and instrumentation APKs compile, **16 host tests pass**, and lint has **0 errors / 16 warnings**. The debug APK has been installed on the authorized Pixel 8 Pro without clearing data. Automated device tests are blocked by a missing offline Gradle UTP dependency; formal app UAT remains pending. Mandatory runtime validation is Pixel 8 Pro / GrapheneOS Android 17 / API 37; OPPO and API 36 runtime coverage remain deferred. See [current results and warning dispositions](docs/sessions/d-4582d3.md), [remaining work](docs/FOLLOW_UP.md), and the [historical prototype handoff](docs/sessions/d-1044a6.md). Android 10–15 compatibility is no longer in scope.
+**Status: TTL-001 implementation, not release-ready.** Android **16+ (API 36)** is the intended support floor; minimum/compile/target SDK are 36. TTL-003 now verifies the instrumentation cache offline under an explicitly revised native-resolution procedure. Fresh host checks: **16 tests pass**, both APKs build, lint has **0 errors / 16 warnings**. Supplementary CPH2699/API36 instrumentation executed **16 tests: 14 passed, 2 failed**; new follow-up **TTL-010** owns these failures without reopening the TTL-001 implementation wrap-up. Mandatory Pixel 8 Pro / GrapheneOS API37 validation, independent review and formal UAT remain pending. See the [offline workflow, evidence and approval limitations](docs/OFFLINE_INSTRUMENTATION.md), [remaining work](docs/FOLLOW_UP.md), [prior implementation and warning dispositions](docs/sessions/d-4582d3.md), and [historical prototype handoff](docs/sessions/d-1044a6.md). Android 10–15 compatibility is no longer in scope.
 
 ## Implemented
 
@@ -20,7 +20,7 @@ Example: at a 5-second capture interval and 30 fps, 300 photos represent approxi
 
 ## Build
 
-Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **35.0.0**, with the pinned Gradle/AGP/Kotlin and cached dependencies. A minimal Java runtime is insufficient. Set `JAVA_HOME` and `ANDROID_HOME` (or configure `sdk.dir` in ignored `local.properties`). TTL-001 checks use the exact approved host paths recorded in [current results](docs/sessions/d-4582d3.md); do not install/upgrade tools or fetch missing dependencies under the current offline-only decision.
+Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **35.0.0**, with the pinned Gradle/AGP/Kotlin and cached dependencies. A minimal Java runtime is insufficient. Set `JAVA_HOME` and `ANDROID_HOME` (or configure `sdk.dir` in ignored `local.properties`). TTL-003 checks retain the exact existing host paths in the [offline runbook](docs/OFFLINE_INSTRUMENTATION.md). Do not install/upgrade tools or fetch missing dependencies without a separate bounded owner approval; prior retrieval approval is not blanket network permission.
 
 ```sh
 ./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:testDebugUnitTest :app:assembleDebug
@@ -28,7 +28,7 @@ Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **3
 ./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:lintDebug
 ```
 
-These are implementation phase checks, not the independently approved full review matrix. Device tests require the approved explicit Pixel identity-selection wrapper and isolated install/test authorization; do not use an implicit device or substitute a direct instrumentation invocation to bypass the missing offline dependency.
+These are implementation phase checks, not the independently approved full review matrix. Device tests require fresh disposable-context/install/test permission and an explicit exact-identity wrapper. See the [runbook's no-uninstall command correction](docs/OFFLINE_INSTRUMENTATION.md#validation-and-phone-data-boundary) before any device invocation: the original matrix must be reconciled/reapproved. Do not use an implicit device, alternate runner or unapproved device substitution.
 
 Local build artifacts (not committed):
 
@@ -148,7 +148,7 @@ shell and discovery command work.
 
 Grant camera permission and select **rear/front, interval and fps before starting**. Keep the app open and the phone steady, then stop capture and export. The session's camera/settings stay locked while paused or recovered; changing them requires confirmed Delete photos / New session (Cancel retains them). Camera permission is not needed to export valid saved photos. Exported videos remain in Gallery when session photos are deleted. Uninstalling/clearing app data removes private session photos.
 
-This is a foreground-only prototype, with one current session, portrait output, no background service, no raw-photo export, and no sensor-accurate clock calibration. Low storage stops capture, but export needs additional space for a temporary MP4 and its Gallery copy. Retain photos until export has been played back successfully. Device fixture execution, actual front/rear camera/lifecycle/permission tests, all six Pixel capture combinations, single-frame Gallery playback, independent review/CI and human UAT remain outstanding. New media/recovery fixtures compile but have not run. UI polish/localization and release packaging are deferred. On recovery errors, retain the app data and seek metadata/ownership inspection before retrying; never delete unknown files or media to unblock the app.
+This is a foreground-only prototype, with one current session, portrait output, no background service, no raw-photo export, and no sensor-accurate clock calibration. Low storage stops capture, but export needs additional space for a temporary MP4 and its Gallery copy. Retain photos until export has been played back successfully. Mandatory Pixel fixture execution, actual front/rear camera/lifecycle/permission tests, all six Pixel capture combinations, single-frame Gallery playback, independent review/CI and human UAT remain outstanding. Supplementary API36 media/recovery fixtures ran with two failures; see the offline runbook for exact counts and the TTL-010 follow-up. UI polish/localization and release packaging are deferred. On recovery errors, retain the app data and seek metadata/ownership inspection before retrying; never delete unknown files or media to unblock the app.
 
 ## Stack and source map
 
