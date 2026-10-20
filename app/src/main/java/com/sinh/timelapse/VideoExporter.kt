@@ -219,6 +219,10 @@ class VideoExporter(
         var muxerStarted = false
         var track = -1
         var sampleCount = 0
+        var submittedFrames = 0
+        var configBuffers = 0
+        var eosFlags = 0
+        val recentSamplePts = ArrayDeque<Long>()
         try {
             val writer = MediaMuxer(output.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             muxer = writer
@@ -247,7 +251,11 @@ class VideoExporter(
                         else -> if (index >= 0) {
                             try {
                                 val buffer = checkNotNull(codec.getOutputBuffer(index))
-                                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) bufferInfo.size = 0
+                                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                    configBuffers++
+                                    bufferInfo.size = 0
+                                }
+                                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) eosFlags = bufferInfo.flags
                                 if (bufferInfo.size > 0) {
                                     check(muxerStarted) { "Encoder emitted data before its format" }
                                     buffer.position(bufferInfo.offset)
@@ -258,6 +266,8 @@ class VideoExporter(
                                     }
                                     writer.writeSampleData(track, buffer, sample)
                                     sampleCount++
+                                    if (recentSamplePts.size == 8) recentSamplePts.removeFirst()
+                                    recentSamplePts.addLast(sample.presentationTimeUs)
                                 }
                             } finally {
                                 codec.releaseOutputBuffer(index, false)
@@ -275,6 +285,7 @@ class VideoExporter(
                 try {
                     require(bitmap.width == VIDEO_WIDTH && bitmap.height == VIDEO_HEIGHT) { "Unexpected photo dimensions" }
                     renderer.draw(bitmap, CaptureTiming.presentationTimeUs(index, fps) * 1_000L)
+                    submittedFrames++
                 } finally {
                     bitmap.recycle()
                 }
@@ -283,7 +294,11 @@ class VideoExporter(
             }
             codec.signalEndOfInputStream()
             drain(true)
-            check(muxerStarted && sampleCount == frames.size) { "Encoder produced an unexpected frame count" }
+            check(muxerStarted && sampleCount == frames.size) {
+                "Encoder produced an unexpected frame count: codec=${codec.name}, fps=$fps, " +
+                    "expected=${frames.size}, submitted=$submittedFrames, samples=$sampleCount, " +
+                    "configBuffers=$configBuffers, eosFlags=$eosFlags, recentPtsUs=$recentSamplePts"
+            }
             // MediaMuxer uses a zero-sized EOS sample's PTS as the final sample end time.
             // This gives a one-photo video nonzero duration WITHOUT duplicating an image sample.
             writer.writeSampleData(track, ByteBuffer.allocate(0), MediaCodec.BufferInfo().apply {

@@ -564,6 +564,7 @@ class MediaPipelineTest {
         val id = UUID.randomUUID().toString()
         val name = "Timelapse-$id.mp4"
         val uri = insertFixtureVideo(name, "Movies/IsolatedTimelapseFixture/", true)
+        var fixtureUriPresent = true
         try {
             val files = File(root, "private")
             val cache = File(root, "cache")
@@ -582,7 +583,10 @@ class MediaPipelineTest {
             assertEquals(before, inventory(root))
             assertEquals(uri, fixtureVideoNamed(name))
             // Remove ONLY our fixture row, then inject failure to remove its attributable cache directory.
-            context.contentResolver.delete(uri, null, null)
+            val deleted = context.contentResolver.delete(uri, null, null)
+            fixtureUriPresent = false // Do not delete an already-removed URI again in finally.
+            assertEquals("Delete only this fixture's allocated row", 1, deleted)
+            assertNull(fixtureVideoNamed(name))
             temporary.delete()
             temporary.mkdirs()
             File(temporary, "obstruction").writeText("fixture cleanup failure")
@@ -597,7 +601,7 @@ class MediaPipelineTest {
             exporter.reconcile()
             assertFalse(record.exists())
         } finally {
-            context.contentResolver.delete(uri, null, null)
+            if (fixtureUriPresent) context.contentResolver.delete(uri, null, null)
             root.deleteRecursively()
         }
     }
