@@ -505,7 +505,7 @@ class MediaPipelineTest {
 
     @Test fun interruptedExportsCleanOnlyTheirPendingOutputsAndPreservePublishedVideos() {
         val root = fixtureRoot("export-recovery")
-        val allocatedUris = mutableSetOf<Uri>()
+        val allocatedUris = mutableMapOf<Uri, String>()
         try {
             val store = SessionStore(root)
             val session = store.create(1_000, 15, SessionLens.FRONT)
@@ -515,8 +515,9 @@ class MediaPipelineTest {
             val files = File(root, "private")
             val cache = File(root, "cache")
             val unrelatedCache = File(cache, "unrelated.mp4").apply { parentFile?.mkdirs(); writeText("not an attempt") }
-            val unrelatedUri = insertFixtureVideo("Unrelated-${UUID.randomUUID()}.mp4", "Movies/TimestampTimelapse/", true)
-            allocatedUris += unrelatedUri
+            val unrelatedName = "Unrelated-${UUID.randomUUID()}.mp4"
+            val unrelatedUri = insertFixtureVideo(unrelatedName, "Movies/TimestampTimelapse/", true)
+            allocatedUris[unrelatedUri] = unrelatedName
             val publishedBytes = mutableMapOf<Uri, List<Byte>>()
             for (boundary in listOf("recorded", "encoded", "inserted", "copying", "copied", "published")) {
                 val exporter = VideoExporter(context, files, cache) { if (it == boundary) throw SimulatedProcessDeath() }
@@ -528,7 +529,7 @@ class MediaPipelineTest {
                 val id = JSONObject(journal.readText()).getString("id")
                 val uri = fixtureVideoNamed("Timelapse-$id.mp4")
                 if (uri != null) {
-                    allocatedUris += uri
+                    allocatedUris[uri] = "Timelapse-$id.mp4"
                     if (boundary == "published") {
                         publishedBytes[uri] = checkNotNull(context.contentResolver.openInputStream(uri)).use { it.readBytes().toList() }
                     }
@@ -548,13 +549,13 @@ class MediaPipelineTest {
                 }
                 // Explicit retry after reconciliation succeeds and does not alter source photos.
                 val retry = recovery.export(session, store.frames(session)) {}
-                allocatedUris += retry
+                allocatedUris[retry] = checkNotNull(videoName(retry))
                 publishedBytes[retry] = checkNotNull(context.contentResolver.openInputStream(retry)).use { it.readBytes().toList() }
                 assertEquals(before, inventory(session.directory))
             }
         } finally {
             // Test teardown only: exact URIs allocated by THIS isolated fixture, never discovered user media.
-            allocatedUris.forEach { context.contentResolver.delete(it, null, null) }
+            allocatedUris.forEach { (uri, name) -> deleteFixtureVideoIfPresent(uri, name) }
             root.deleteRecursively()
         }
     }
@@ -654,6 +655,18 @@ class MediaPipelineTest {
             retry?.let { context.contentResolver.delete(it, null, null) }
             root.deleteRecursively()
         }
+    }
+
+    /** Collection lookup first: Android may reject a second delete of an already-removed URI.
+     * Names are UUID allocations recorded by this fixture, never a prefix or discovered user row.
+     */
+    private fun deleteFixtureVideoIfPresent(uri: Uri, name: String) {
+        val found = fixtureVideoNamed(name) ?: return
+        check(found == uri) { "Fixture identity changed; retain rather than delete another row" }
+        assertEquals(1, context.contentResolver.delete(uri,
+            "${MediaStore.Video.Media.DISPLAY_NAME} = ? AND ${MediaStore.Video.Media.OWNER_PACKAGE_NAME} = ? AND " +
+                "${MediaStore.Video.Media.RELATIVE_PATH} = ?",
+            arrayOf(name, context.packageName, "Movies/TimestampTimelapse/")))
     }
 
     private fun insertFixtureVideo(name: String, path: String, pending: Boolean): Uri =
