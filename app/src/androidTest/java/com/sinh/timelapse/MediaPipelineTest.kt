@@ -279,6 +279,37 @@ class MediaPipelineTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun repeatedRapidExportsKeepExactFramesAcrossFpsCountsAndScenes() {
+        val root = fixtureRoot("repeated-encoder")
+        val bitmap = Bitmap.createBitmap(VIDEO_WIDTH, VIDEO_HEIGHT, Bitmap.Config.ARGB_8888)
+        var exports = 0
+        try {
+            for (scene in 0..1) {
+                val store = SessionStore(File(root, "scene-$scene"))
+                val session = store.create(1000, 30)
+                bitmap.eraseColor(if (scene == 0) Color.BLACK else Color.BLUE)
+                if (scene == 1) Canvas(bitmap).drawRect(0f, 0f, VIDEO_WIDTH / 2f, VIDEO_HEIGHT.toFloat(),
+                    Paint().apply { color = Color.RED })
+                repeat(150) { store.saveFrame(session, bitmap, 1000L + it) }
+                val frames = store.frames(session)
+                fun hashes() = frames.associate { frame -> frame.name to
+                    java.security.MessageDigest.getInstance("SHA-256").digest(frame.readBytes()).toList() }
+                val before = hashes()
+                val exporter = VideoExporter(context)
+                for (fps in listOf(15, 24, 30)) for (count in listOf(1, 2, 4, 5 * fps)) repeat(2) { iteration ->
+                    val output = File(root, "$scene-$fps-$count-$iteration.mp4")
+                    exporter.encode(output, frames.take(count), fps) {}
+                    exporter.validateEncoded(output, count, fps, 5)
+                    assertEquals("Exact decoded frames for scene=$scene fps=$fps count=$count iteration=$iteration",
+                        count, decodedFrameCount(output))
+                    exports++
+                }
+                assertEquals(before, hashes())
+            }
+            assertEquals("All repeated-export vectors must execute", 48, exports)
+        } finally { bitmap.recycle(); root.deleteRecursively() }
+    }
+
     private fun decodedFrameCount(file: File): Int {
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
