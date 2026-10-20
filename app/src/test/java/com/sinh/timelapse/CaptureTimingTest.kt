@@ -1,8 +1,10 @@
 package com.sinh.timelapse
 
+import java.math.BigInteger
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class CaptureTimingTest {
@@ -103,4 +105,81 @@ class CaptureTimingTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun `zero fps is rejected`() { CaptureTiming.presentationTimeUs(0, 0) }
+
+    @Test fun `Adaptive cadence doubles by stage and saturates without overflow`() {
+        val expected = listOf(500L, 1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L, 60_000L)
+        expected.forEachIndexed { stage, interval ->
+            assertEquals(interval, CaptureTiming.adaptiveIntervalMillis(stage.toLong()))
+            if (stage > 0) assertEquals(interval, CaptureTiming.doubledAdaptiveIntervalMillis(expected[stage - 1]))
+        }
+        for (stage in listOf(63L, Int.MAX_VALUE.toLong(), Long.MAX_VALUE)) {
+            assertEquals(60_000L, CaptureTiming.adaptiveIntervalMillis(stage))
+        }
+        for (interval in listOf(30_000L, 60_000L, Long.MAX_VALUE / 2, Long.MAX_VALUE)) {
+            assertEquals(60_000L, CaptureTiming.doubledAdaptiveIntervalMillis(interval))
+        }
+        assertEquals(59_998L, CaptureTiming.doubledAdaptiveIntervalMillis(29_999))
+        assertThrows(IllegalArgumentException::class.java) { CaptureTiming.adaptiveIntervalMillis(-1) }
+        assertThrows(IllegalArgumentException::class.java) { CaptureTiming.doubledAdaptiveIntervalMillis(0) }
+        assertThrows(IllegalArgumentException::class.java) { CaptureTiming.doubledAdaptiveIntervalMillis(Long.MIN_VALUE) }
+    }
+
+    @Test fun `Adaptive intervals preserve anchor skip slow slots and explicitly reanchor on resume`() {
+        val anchor = 10_000L
+        for (stage in 0L..10L) {
+            val interval = CaptureTiming.adaptiveIntervalMillis(stage)
+            assertEquals(interval - 123, CaptureTiming.nextDelayMillis(anchor, anchor + 123, interval))
+            assertEquals(interval - 123, CaptureTiming.nextDelayMillis(anchor, anchor + interval * 25 + 123, interval))
+            assertEquals(interval, CaptureTiming.nextDelayMillis(anchor, anchor + interval * 25, interval))
+            // Explicit resume starts a new segment; it does not inherit time spent paused.
+            val resumeAnchor = anchor + interval * 25 + 123
+            assertEquals(interval, CaptureTiming.nextDelayMillis(resumeAnchor, resumeAnchor, interval))
+            assertEquals(interval - 7, CaptureTiming.nextDelayMillis(resumeAnchor, resumeAnchor + 7, interval))
+        }
+    }
+
+    @Test fun `thinning changes interval without changing active segment anchor`() {
+        val sampling = AdaptiveSampling()
+        val anchor = 10_000L
+        repeat(900) { sampling.onCommitted(CommittedFrame(it.toLong(), it * 500L)) }
+        assertEquals(377L, CaptureTiming.nextDelayMillis(anchor, 460_123, sampling.intervalMillis))
+        sampling.onCommitted(CommittedFrame(900, 450_123))
+        assertEquals(1_000L, sampling.intervalMillis)
+        assertEquals(877L, CaptureTiming.nextDelayMillis(anchor, 460_123, sampling.intervalMillis))
+        assertEquals(1_000L, CaptureTiming.nextDelayMillis(460_123, 460_123, sampling.intervalMillis))
+    }
+
+    @Test fun `checked budget rejects Long extremes rather than wrapping into a valid cap`() {
+        for (seconds in listOf(Long.MIN_VALUE, -1L, 0L, 4L, 601L, Long.MAX_VALUE / 30, Long.MAX_VALUE)) {
+            assertThrows(IllegalArgumentException::class.java) { CaptureTiming.adaptiveFrameBudget(seconds, 30) }
+        }
+        for (fps in listOf(Long.MIN_VALUE, 0L, 14L, 31L, Long.MAX_VALUE)) {
+            assertThrows(IllegalArgumentException::class.java) { CaptureTiming.adaptiveFrameBudget(30, fps) }
+        }
+        for (seconds in listOf(5L, 30L, 600L)) for (fps in listOf(15L, 24L, 30L)) {
+            assertEquals((seconds * fps).toInt(), CaptureTiming.adaptiveFrameBudget(seconds, fps))
+        }
+    }
+
+    @Test fun `gap bound comparison matches arbitrary precision at overflow boundaries`() {
+        val gaps = listOf(0L, 1L, 2L, 3L, 500L, Long.MAX_VALUE / 2, Long.MAX_VALUE / 2 + 1, Long.MAX_VALUE)
+        for (selected in gaps) for (completed in gaps) for (stage in listOf(0L, 1L, 2L, 7L, 62L, 63L, 64L, Long.MAX_VALUE)) {
+            // Beyond 63, every positive Long gap fits if completed gap is positive.
+            val bound = BigInteger.valueOf(completed).shiftLeft(minOf(stage, 64L).toInt())
+            assertEquals("selected=$selected completed=$completed stage=$stage",
+                BigInteger.valueOf(selected) <= bound,
+                CaptureTiming.isWithinAdaptiveGapBound(selected, completed, stage))
+        }
+        assertThrows(IllegalArgumentException::class.java) { CaptureTiming.isWithinAdaptiveGapBound(-1, 0, 0) }
+        assertThrows(IllegalArgumentException::class.java) { CaptureTiming.isWithinAdaptiveGapBound(0, -1, 0) }
+        assertThrows(IllegalArgumentException::class.java) { CaptureTiming.isWithinAdaptiveGapBound(0, 0, -1) }
+    }
+
+    @Test fun `PTS remains exact for all rates through maximum frame index`() {
+        for (fps in listOf(15, 24, 30)) for (index in listOf(0, 1, 2, 74, 75, 899, 900, 17_999, 18_000, Int.MAX_VALUE)) {
+            val expected = BigInteger.valueOf(index.toLong()).multiply(BigInteger.valueOf(1_000_000L))
+                .divide(BigInteger.valueOf(fps.toLong())).longValueExact()
+            assertEquals(expected, CaptureTiming.presentationTimeUs(index, fps))
+        }
+    }
 }
