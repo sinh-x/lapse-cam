@@ -1,5 +1,190 @@
 # TTL-004: implementation candidate → independent review / UAT
 
+## TTL-010 owner-directed closeout (2026-10-21; d-43fa80)
+
+Sinh explicitly directed: **“consider ticket done proceed to merge to develop
+and wrap up ticket”**, recorded in `c-20261021173725580`. This supersedes the
+prior handoff's no-commit/no-merge instruction. Scope being integrated: the
+retained offline validation libraries/selftests and diagnosis documentation;
+**no new encoder or Kotlin test behavior change**. Final commit/merge and ticket
+status receipts are recorded in the ticket rather than guessed here.
+
+This is administrative closure by owner direction, **not a proven encoder fix or
+completion of the original acceptance criteria**. The encoder cause remains
+unknown after non-reproduction. The helper is deliberately partial: only
+`selftest` is end-to-end; its production CLI stages fail closed. Native focused
+checks used the separately authorized phase exception, not that unfinished CLI.
+No missing check is marked passed by this closeout: the independent final full
+suite/matrix/review, CI, mandatory Pixel and camera/Gallery human UAT remain
+pending, and warning dispositions remain proposals. No release/push, extra device
+run, focused-budget reset, branch deletion or checkout return is authorized.
+Earlier “uncommitted/not closed/no merge” statements below describe their recorded
+historical stage; they do not negate this later owner decision or turn it into
+technical acceptance.
+
+## TTL-010 authorized focused OPPO check (2026-10-21; d-43fa80)
+
+**Checked, not fixed/closed: the encoder mismatch did not reproduce.** Sinh's
+fresh foreground decision `c-20261021171617264` confirmed a disposable OPPO
+app/test context and stopped other cache writers. It explicitly permitted direct
+native offline phase checks while the unfinished helper remains blocked. This
+exception is **not** the independent final matrix or completion of Phase1.
+
+Frozen execution source: HEAD `4b4a6ee17492035c9f41a91b02fd93d5ff3f89f0`,
+branch `feature/TTL-010-encoder-diagnosis`, with the pre-run docs/helper overlay
+bound by an all-path raw-hash inventory. Helper execution SHA-256:
+`6e6899fb80de2bad6e89620f0f4b5db0cfbee9151b8ee5f3addc28da771f1ddc`.
+All product, Kotlin tests, toolchain pins and cache-helper bytes matched HEAD;
+source hashes were rechecked after commands. No new test/encoder fix was made.
+
+| Fresh phase check | Actual result |
+|---|---|
+| Source-current offline cache inventory | Exit0;16 configurations,164 unique artifacts; full graph/artifact equality with retained TTL-003 receipt and independently checked raw cached bytes; source delta explicit, old receipt not relabelled |
+| Native host/build/lint, `--rerun-tasks` | Exit0;42/42 current host methods,0failures/errors/skips/duplicates; both APKs built; lint0errors/22warnings |
+| Sole focused native OPPO invocation | Exit0;exact4/4 approved methods,0failures/errors/skips/duplicates; fresh XML after marker |
+| Installed app + test APKs | Both retained; post-run hashes match the fresh candidate outputs |
+| Final full32-method suite / independent matrix | **Not run**; no final device slot claimed |
+
+Focused results: `ambiguousOwnershipAndCleanupFailureRetainRecordsForExplicitRetry`,
+`interruptedExportsCleanOnlyTheirPendingOutputsAndPreservePublishedVideos`,
+`adaptiveMediaUsesExactlyFrozenSelectionAtEveryFpsWithoutModifyingPhotos`, and
+`repeatedRapidExportsKeepExactFramesAcrossFpsCountsAndScenes` all passed on one
+freshly checked **CPH2699/API36/buildCPH2699_16.0.5.1200(EX01)**. The unchanged
+stress method's exports==48, encoded/decoded counts, PTS/duration/cap and per-scene
+JPEG-hash assertions completed; no raw per-vector telemetry is invented from XML.
+This confirms the existing cleanup regressions pass, not an intermittent encoder
+root cause or repair. The single focused ticket-wide budget is now consumed;
+crash/nonzero/unknown attempts must not reset it. No automatic device replay.
+
+Lint has individual proposed dispositions bound to every current occurrence:
+LockedOrientationActivity1, DiscouragedApi1, DataExtractionRules1, UseKtx7,
+SetTextI18n12. No GradleDependency warning was emitted in this run; its absence is
+not an upgrade, suppression or explanation of historical warning-count changes.
+Independent warning acceptance remains pending. APK SHA-256:
+- App: `e1478848586da03a31a81c9f5695ebeeda1e09606a646bed4f819c398b8034d6`.
+- Test: `9645514ade1d927b40bd2e2de4e92aaef31cee54e4d62ed679db59e050cab89a`.
+
+Old host/device outputs were preserved absent-only before fresh native runs;
+restricted original streams, exits, XML/HTML, APKs, hash manifests, source delta,
+warning ledger and driver are under
+`deployments/d-43fa80/artifacts/ttl010-focused-phase/` in the PA workspace.
+Two prelaunch driver stops are retained separately: tuple/list JSON binding
+comparison (corrected before any Gradle launch), and a transient Gradle writer
+observation before device admission (no device intent/process yet). Only one
+native cache, host and focused invocation actually launched; original stops are
+not reclassified as passing checks. Device serials remain private.
+
+Native Gradle retained both keep-installed/no-incompatible-uninstall properties,
+explicit private device selection, original pinned environment and offline-only
+resolution. No app-data clear/uninstall, broad cleanup, real storage exhaustion,
+shared ADB restart/replacement, pin changes, downloads, commit, merge or return.
+**Unresolved/no-cause handback:** no speculative test/codec/sleep/count workaround.
+Helper completion, clean final candidate and separately authorized independent
+review/matrix remain pending; mandatory Pixel, CI, camera/Gallery human UAT and
+release gates are also not passed. TTL-001 history remains unchanged.
+
+## TTL-010 offline validators and OPPO connection (2026-10-21; d-43fa80)
+
+**Partial, uncommitted; encoder cause remains unknown.** Sinh approved further
+device-free source analysis/validators, then requested an OPPO device check.
+Read-only queries through the **already running** local ADB server confirmed one
+connected, authorized **CPH2699 / Android16 / API36 /
+CPH2699_16.0.5.1200(EX01)**. Queries were limited to device listing/state and four
+identity properties. No server start/replacement, APK installation, test execution,
+app-data change or device-stage budget claim occurred. Serial stayed private.
+This identity check is not focused/final test permission, cache-writer exclusion,
+source-current offline readiness or disposable-app-context approval.
+
+The retained helper's starting SHA-256 matched d-34584a. Added **library-only**
+checks for bounded UTF-8 XML, owner-only no-follow retained artifacts with strict
+marker freshness/raw hashes, lint format6 per-occurrence dispositions bound to
+raw XML, and extraction of the existing codec/count/EOS/last8PTS mismatch message.
+Supplied rationales are not authenticated warning acceptance; parsed diagnostics
+are not a proven cause; absent diagnostics are not evidence of success. No new
+telemetry format, alternate test runner or production stage was enabled.
+
+Source review: `VideoExporter.encode` increments submitted count after
+`CodecSurface.draw` successfully sets presentation time and swaps EGL buffers;
+it signals input EOS after all submissions and checks sample count after draining.
+Codec-config buffers are excluded from samples, including any config-flagged
+payload; this is an inspection boundary, **not evidence that an OEM emitted such
+a combined buffer or that this caused the failure**. The repeated-export test
+asserts exports==48 after both scenes and checks JPEG hashes per scene; no raw
+per-vector observations survive its temporary fixture teardown. Fresh XML plus
+candidate-bound source review is still needed, and must not be invented from
+these offline comparators. No encoder, cleanup or instrumentation changes made.
+
+Device-free checks: **21/21 selftest groups passed**, zero failures/errors/skips;
+tracked diff and separate untracked-helper whitespace checks passed. Production
+`preflight/host/device/verify` remain blocked before probes, claims or launches.
+No Gradle/build/lint/device tests, commit, independent matrix, Pixel or human UAT.
+Prior reports below remain historical; Phase1 and all ACs remain unaccepted.
+
+## TTL-010 source-only continuation (2026-10-21; d-34584a)
+
+**Partial, uncommitted; encoder cause still unknown.** The older TTL-004 results
+below are historical, not acceptance of this TTL-010 overlay. Starting HEAD/base
+is `4b4a6ee17492035c9f41a91b02fd93d5ff3f89f0` on
+`feature/TTL-010-encoder-diagnosis`. Sinh approved staged source work and direct
+check output in this session (ticket comment `c-20261021114917124` records the
+interactive answer); Gradle, cache effects and all ADB/phone access remain gated.
+The prior 441-line draft and its denied check packet remain preserved in the
+immutable d-0fe3f7 handoff; no historical artifact was overwritten.
+
+`tools/ttl010_validation.py` now provides these **library-only**, offline-tested
+building blocks:
+
+- Owner-only, no-follow, bounded regular-file reads; restricted evidence storage,
+  shared nonblocking directory locking, atomic absent-only result publication,
+  and directly exclusive device intents. Empty/crashed/unsafe intents consume the
+  slot across candidate changes; an orphan result is contradictory, not absence.
+- Read-only candidate/branch and complete NUL-safe clean-inventory checks, all
+  tracked source hashes compared to committed objects (including paths hidden by
+  Git assume-unchanged flags), approved-base pin equality and repeated drift
+  observations. Ignored inputs under `app/src` are also rejected. The exact
+  approved `.gitattributes` is itself pinned: the existing `gradlew.bat` LF blob
+  must match its expected CRLF checkout, without normalizing observed raw hashes.
+  A final audit exposed and corrected the initial blob-vs-checkout comparison;
+  regressions reject wrong wrapper endings or changed attributes.
+- Conservative Kotlin source discovery, including backtick host method names,
+  comments/strings and local helper classes. Unsupported/disabled/aliased/nested
+  test declarations fail closed. Every approved-base method must remain present;
+  new methods expand the set. Current source discovery finds **42 host / 32 device**
+  methods across the six classes; this is inspection, not execution.
+- **18 selftest groups pass**, zero failures/errors/skips. Cases include shared
+  lock exclusion, immutable nonzero results, partial/orphan/unsafe records,
+  source/pin/object drift, baseline-method replacement, added methods, unsafe
+  paths, XML equality/freshness and inert production CLI paths.
+
+Only `selftest` works end-to-end. `preflight`, `host`, `device` and `verify`
+continue to return blocked JSON / exit2 **before observations, stage claims or
+process launches**. Storage fixtures and supplied process receipts are not
+permission or verified settlement. No production validation ledger was opened or
+claimed. No build, device query, app installation or device invocation occurred;
+TTL-010's focused/final device budgets were not consumed by this deployment.
+
+**Execution integration blocker:** installed PPA0.1.141's documented
+`protected-review-v1` contract authenticates protected launch; its CLI
+`review preflight` is explicitly observational. No documented helper-consumable
+stage-authorization/settlement handoff was established. Neither a comment ID,
+caller JSON, environment string nor static-compatible preflight can replace it.
+Before implementing effectful stages, establish a supported authenticated handoff
+binding candidate/ticket/checkout/stage, selected cache/device permissions and
+writer exclusion, process custody and original exit/stream receipts. Do not add
+invented tokens or modify the approved matrix to work around this boundary.
+Native archival/capture/timeouts, installed-APK preservation, lint dispositions,
+raw media evidence and integrated final verification remain **unimplemented**.
+The read-only Git library's captured-output size is checked after completion;
+bounded streaming capture remains part of the unfinished process integration.
+
+`git diff --check` passes for tracked changes; the untracked helper also has a
+separate whitespace audit (ordinary Git diff does not cover it). Host/build/lint
+checks remain blocked, not waived, so Phase1 is **not accepted** and no commit is
+made. Kotlin cleanup/media/stress and all toolchain/cache-helper pins are
+unchanged. No speculative encoder repair, relaxed assertions, download, merge or
+checkout return. Mandatory Pixel, independent matrix/review/CI, camera/Gallery
+human UAT and release gates remain pending.
+
 ## OPPO follow-up: cleanup fixes and repeated-export validation (2026-10-20)
 
 Sinh authorized bounded encoder/fixture work on this TTL-004 branch, then explicitly corrected testing from Pixel to **OPPO/CPH2699**. Fresh identity checks before every device run: exactly one authorized CPH2699 / Android16 / API36 / buildCPH2699_16.0.5.1200(EX01). The Pixel was not tested or updated during this follow-up; it retains the earlier manual-UAT build installed on request. The reported foreground “all good” is informal manual feedback, not a completed16-scenario UAT record.
