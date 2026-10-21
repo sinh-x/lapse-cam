@@ -43,6 +43,7 @@ data class CaptureSession(
     val configuration: SamplingConfiguration? = null,
     val appearance: TimestampAppearance = TimestampAppearance(),
     val version: Int = 2,
+    val split: SessionSplit = SessionSplit.OFF,
 )
 
 /** All calls are serialized on the capture worker; a completed JPEG is the source of truth. */
@@ -65,7 +66,10 @@ class SessionStore(filesDirectory: File,
         LegacyProgress(files.size, files.sumOf { it.length() },
             files.lastOrNull()?.name?.substringAfter("frame_")?.substringBefore('_')?.toInt()?.let { Math.addExact(it, 1) } ?: 0)
     }
-    private val root = File(filesDirectory, "sessions").apply { check(mkdirs() || isDirectory) { "Cannot open saved sessions" } }
+    private val root = File(filesDirectory.canonicalFile, "sessions").apply {
+        check(mkdirs() || isDirectory) { "Cannot open saved sessions" }
+        check(canonicalFile == absoluteFile) { "Aliased sessions root; retained" }
+    }
 
     fun create(intervalMillis: Long, fps: Int, lens: SessionLens = SessionLens.REAR): CaptureSession {
         require(intervalMillis >= 1_000 && fps in 1..30)
@@ -91,13 +95,19 @@ class SessionStore(filesDirectory: File,
         return session
     }
 
-    fun latest(): CaptureSession? = scannedFiles(root)
-        .filter { it.isDirectory }
-        .map { directory ->
-            try {
+    fun directories(): List<File> = scannedFiles(root).filter { it.isDirectory }
+
+    fun latest(excluded: Set<String> = emptySet()): CaptureSession? = directories()
+        .filter { it.name !in excluded }
+        .map { load(it, false) }.maxByOrNull { it.startedAt }?.let { load(it.directory) }
+
+    fun load(directory: File, recover: Boolean = true): CaptureSession {
+        require(directory.parentFile == root && directory.canonicalFile == directory.absoluteFile) { "Invalid session path" }
+        return try {
                 val json = JSONObject(AtomicFile(File(directory, "session.json")).readFully().toString(Charsets.UTF_8))
                 val version = json.get("version")
                 require(version is Int) { "Session version must be an integer" }
+                check(version == 3 || (!json.has("lifecycleVersion") && !json.has("split"))) { "Unexpected lifecycle metadata" }
                 val lens = when (version) {
                     1 -> SessionLens.REAR
                     2, 3 -> SessionLens.parse(json.get("lens") as? String ?: error("Missing session lens"))
@@ -124,14 +134,23 @@ class SessionStore(filesDirectory: File,
                     val style = TimestampAppearance(StampFamily.valueOf(json.getString("family")),
                         strictBoolean(json, "bold"), Math.toIntExact(strictLong(json, "size")),
                         StampPosition.valueOf(json.getString("position")), strictBoolean(json, "date"))
-                    CaptureSession(directory, json.getLong("startedAt"), interval, fps, zone, lens, config, style, 3)
-                        .also { recoverProgress(it) }
+                    val split = if (json.has("lifecycleVersion")) {
+                        check(json.get("lifecycleVersion") == 1)
+                        SessionSplit.parse(json.get("split") as? String ?: error("Invalid split value")).also {
+                            check(config is SamplingConfiguration.Adaptive && it != SessionSplit.OFF)
+                        }
+                    } else {
+                        check(!json.has("split")) { "Split without lifecycle schema; retained" }
+                        SessionSplit.OFF
+                    }
+                    CaptureSession(directory, json.getLong("startedAt"), interval, fps, zone, lens, config, style, 3, split)
+                        .also { if (recover) recoverProgress(it) }
                 } else CaptureSession(directory, json.getLong("startedAt"), interval, fps, zone, lens)
             } catch (error: Exception) {
                 // Never hide an unreadable session by silently selecting an older one.
                 throw IllegalStateException("Cannot recover session ${directory.name}. Keep its photos; repair metadata then retry recovery", error)
             }
-        }.maxByOrNull { it.startedAt }
+    }
 
     private fun scannedFiles(directory: File): Array<File> {
         onHistoricalScan()
@@ -167,22 +186,39 @@ class SessionStore(filesDirectory: File,
     }
 
     /** New sessions use v3; the original overload remains the exact legacy v2 writer. */
-    fun create(configuration: SamplingConfiguration, lens: SessionLens, appearance: TimestampAppearance): CaptureSession {
-        val now = epochMillis()
+    fun create(configuration: SamplingConfiguration, lens: SessionLens, appearance: TimestampAppearance,
+        split: SessionSplit = SessionSplit.OFF, identity: String? = null, zoneId: String = ZoneId.systemDefault().id): CaptureSession {
+        require(SessionSplit.forConfiguration(configuration, split) == split)
+        val now = identity?.substringBefore('-')?.toLong() ?: epochMillis()
         require(now >= 0)
         val interval = when (configuration) {
             is SamplingConfiguration.Adaptive -> 500L
             is SamplingConfiguration.Fixed -> configuration.intervalMillis
         }
-        val directory = File(root, "$now-${UUID.randomUUID()}").apply { check(mkdirs()) }
-        val session = CaptureSession(directory, now, interval, configuration.fps, ZoneId.systemDefault().id,
-            lens, configuration, appearance, 3)
+        val name = identity ?: "$now-${UUID.randomUUID()}"
+        require(name.matches(Regex("[0-9]+-[0-9a-f-]{36}")))
+        require(UUID.fromString(name.substringAfter('-')).toString() == name.substringAfter('-'))
+        val directory = File(root, name)
+        check(directory.canonicalFile == directory.absoluteFile)
+        if (File(directory, "session.json").exists() || File(directory, "session.json.bak").exists()) {
+            return load(directory).also {
+                check(it.startedAt == now && it.configuration == configuration && it.lens == lens && it.appearance == appearance &&
+                    it.split == split && it.zoneId == zoneId) { "Successor configuration mismatch" }
+            }
+        }
+        check(directory.mkdirs() || directory.isDirectory)
+        check(directory.listFiles()!!.all { it.name in setOf("progress.json", "progress.json.bak", "progress.json.new") }) {
+            "Unknown partial session; retained"
+        }
+        val session = CaptureSession(directory, now, interval, configuration.fps, ZoneId.of(zoneId).id,
+            lens, configuration, appearance, 3, split)
         val json = JSONObject().put("version", 3).put("lens", lens.storedValue).put("startedAt", now)
             .put("intervalMillis", interval).put("fps", configuration.fps).put("zoneId", session.zoneId)
             .put("mode", if (configuration is SamplingConfiguration.Adaptive) "adaptive" else "fixed")
             .put("maxSeconds", (configuration as? SamplingConfiguration.Adaptive)?.maxSeconds ?: 0)
             .put("family", appearance.family.name).put("bold", appearance.bold).put("size", appearance.size)
             .put("position", appearance.position.name).put("date", appearance.date)
+        if (split != SessionSplit.OFF) json.put("lifecycleVersion", 1).put("split", split.storedValue)
         // Empty progress first: a published session header always has a durable checkpoint.
         val state = Progress(selector = (configuration as? SamplingConfiguration.Adaptive)?.let(::AdaptiveSampling))
         writeProgress(session, state)
@@ -213,6 +249,21 @@ class SessionStore(filesDirectory: File,
             .put("active", state.active).put("running", state.running).put("unknown", state.unknown)
             .put("stage", state.selector?.thinningStage ?: 0).put("selected", selection(state)))
 
+    /** Compact historical review only; do not replay/cache every old selector or mutate old metadata. */
+    fun savedSummary(session: CaptureSession): Snapshot {
+        if (session.version < 3) return snapshot(session).also { release(session) }
+        val json = readJson(File(session.directory, "progress.json"))
+        check(json.get("version") == 1)
+        val count = Math.toIntExact(strictLong(json, "count"))
+        val bytes = strictLong(json, "bytes")
+        val selected = if (session.configuration is SamplingConfiguration.Adaptive) json.getJSONArray("selected").length() else count
+        val active = strictLong(json, "active")
+        val stage = strictLong(json, "stage")
+        check(count >= 0 && bytes >= 0 && selected in 0..count && active >= 0 && stage >= 0)
+        return Snapshot(count, bytes, selected, stage, active, strictBoolean(json, "unknown") || strictBoolean(json, "running"),
+            if (session.configuration is SamplingConfiguration.Adaptive) CaptureTiming.adaptiveIntervalMillis(stage) else session.intervalMillis)
+    }
+
     fun snapshot(session: CaptureSession): Snapshot {
         if (session.version < 3) {
             val cached = legacyState(session)
@@ -241,6 +292,11 @@ class SessionStore(filesDirectory: File,
         val state = state(session)
         require(activeMillis >= state.active) { "Active request time moved backwards" }
         val id = state.nextId
+        check(session.directory.canonicalFile == session.directory.absoluteFile) { "Aliased session; retained" }
+        val intentName = "intent_$id.json"
+        check(listOf(intentName, "$intentName.bak", "$intentName.new").none {
+            java.nio.file.Files.exists(File(session.directory, it).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        }) { "Unreserved sidecar occupies the next frame ID; retained without overwriting" }
         state.nextId = Math.addExact(id, 1)
         state.active = maxOf(state.active, activeMillis)
         writeProgress(session, state)
@@ -320,6 +376,10 @@ class SessionStore(filesDirectory: File,
         check(state.nextId >= 0 && state.active >= 0)
         val files = scannedFiles(session.directory)
         val intents = files.filter { it.name.matches(Regex("intent_[0-9]+\\.json(?:\\.bak)?")) }
+            // Split sessions quarantine unreserved/lookalike sidecars by leaving them in place.
+            // They cannot supply frame provenance or enter the cleanup inventory. Reserved
+            // metadata still parses strictly; unknown completed JPEGs still fail below.
+            .filter { session.split == SessionSplit.OFF || SessionIntentPolicy.isReservedSidecar(it.name, state.nextId) }
             .map { it.name.removeSuffix(".bak") }.distinct()
             .map { readIntent(File(session.directory, it)) }.sortedBy { it.id }
         val known = intents.associateBy { it.name }
@@ -371,6 +431,32 @@ class SessionStore(filesDirectory: File,
             check(intent.activeMillis == frame.activeOffsetMillis)
             File(session.directory, intent.name).also { check(it.isFile) { "Selected JPEG missing; photos retained" } }
         }
+    }
+
+    /** Provenance check for a closed inventory. Unknown lookalike sidecars are NOT deletion authority. */
+    fun ownsSource(session: CaptureSession, file: File): Boolean = runCatching {
+        check(file.parentFile == session.directory && file.isFile && file.canonicalFile == file.absoluteFile)
+        if (session.version < 3) {
+            check(file.name.matches(Regex("frame_[0-9]{8,19}_[0-9]+\\.jpg")))
+        } else {
+            val id = when {
+                file.name.matches(Regex("frame_[0-9]{19}_[0-9]+\\.jpg")) -> file.name.substringAfter("frame_").substringBefore('_').toLong()
+                file.name.matches(Regex("intent_[0-9]+\\.json")) -> {
+                    check(SessionIntentPolicy.isReservedSidecar(file.name, state(session).nextId))
+                    file.name.substringAfter("intent_").substringBefore('.').toLong()
+                }
+                else -> error("Unknown source")
+            }
+            check(id < state(session).nextId)
+            val intent = readIntent(File(session.directory, "intent_$id.json"))
+            if (file.name.endsWith(".jpg")) check(intent.name == file.name && id <= state(session).lastCommittedId)
+        }
+        true
+    }.getOrDefault(false)
+
+    fun release(session: CaptureSession) {
+        progress.remove(session.directory)
+        legacyProgress.remove(session.directory)
     }
 
     fun discard(session: CaptureSession) {

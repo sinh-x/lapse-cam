@@ -29,7 +29,10 @@ class VideoExporter(
     private val checkpoint: (String) -> Unit = {},
 ) {
     private val attempts = File(filesDirectory, "export-attempts").apply { check(mkdirs() || isDirectory) }
-    private val cache = File(cacheDirectory, "export-attempts").apply { check(mkdirs() || isDirectory) }
+    private val cache = File(cacheDirectory.canonicalFile, "export-attempts").apply {
+        check(mkdirs() || isDirectory)
+        check(canonicalFile == absoluteFile) { "Aliased export cache; retained" }
+    }
 
     private data class Attempt(val id: String, val uri: Uri? = null) {
         val name: String get() = "Timelapse-$id.mp4"
@@ -56,7 +59,8 @@ class VideoExporter(
         }
     }
 
-    fun export(session: CaptureSession, frames: List<File>, onProgress: (Int) -> Unit): Uri = synchronized(exportLock) {
+    fun export(session: CaptureSession, frames: List<File>, operationId: String? = null,
+        onProgress: (Int) -> Unit): Uri = synchronized(exportLock) {
         val selected = frames.toList()
         require(selected.isNotEmpty()) { "Capture at least one photo first" }
         val adaptive = session.configuration as? SamplingConfiguration.Adaptive
@@ -67,8 +71,12 @@ class VideoExporter(
         check(availableBytes(cache) >= headroom && availableBytes(Environment.getExternalStorageDirectory()) >= headroom) {
             "Insufficient export headroom. Photos retained; free space and retry"
         }
+        operationId?.let { id ->
+            require(UUID.fromString(id).toString() == id)
+            findPublished(id)?.let { return@synchronized it }
+        }
         reconcile()
-        var attempt = Attempt(UUID.randomUUID().toString())
+        var attempt = Attempt(operationId ?: UUID.randomUUID().toString())
         writeAttempt(attempt) // Durable identity BEFORE encoding or inserting any external output.
         val temporary = File(cache, "${attempt.id}.mp4")
         try {
@@ -107,6 +115,95 @@ class VideoExporter(
         } catch (error: Exception) {
             runCatching { reconcileAttempt(attempt) }.exceptionOrNull()?.let(error::addSuppressed)
             throw error
+        }
+    }
+
+    /** Exact operation lookup only. Ambiguity or alien ownership blocks, never allocates a duplicate. */
+    internal fun findPublished(operation: String): Uri? = synchronized(exportLock) {
+        require(UUID.fromString(operation).toString() == operation)
+        val attempt = Attempt(operation)
+        val query = Bundle().apply {
+            putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "${MediaStore.Video.Media.DISPLAY_NAME} = ?")
+            putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(attempt.name))
+            putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+        }
+        checkNotNull(context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.RELATIVE_PATH,
+                MediaStore.Video.Media.OWNER_PACKAGE_NAME, MediaStore.Video.Media.IS_PENDING), query, null)).use { rows ->
+            check(rows.count <= 1) { "Ambiguous publication; photos retained" }
+            if (!rows.moveToFirst()) return@synchronized null
+            check(rows.getString(1) == attempt.name && rows.getString(2) == MOVIE_PATH && rows.getString(3) == context.packageName) {
+                "Cannot prove published output ownership; photos retained"
+            }
+            val pending = rows.getInt(4)
+            check(pending == 0 || pending == 1)
+            if (pending == 1) null else android.content.ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, rows.getLong(0))
+        }
+    }
+
+    internal data class PublishedVerification(val uri: Uri, val sha256: String, val count: Int, val fps: Int, val cap: Int)
+
+    /** Validate the actual Gallery bytes, not the encoder cache or its return value. */
+    internal fun verifyPublished(session: CaptureSession, operation: String, expectedUri: Uri?, count: Int): PublishedVerification = synchronized(exportLock) {
+        val uri = checkNotNull(findPublished(operation)) { "Published output missing or pending; photos retained" }
+        check(expectedUri == null || expectedUri == uri) { "Publication identity changed; photos retained" }
+        val cap = (session.configuration as SamplingConfiguration.Adaptive).maxSeconds
+        val copy = File(cache, "$operation.verification")
+        check(copy.canonicalFile == copy.absoluteFile)
+        try {
+            checkNotNull(context.contentResolver.openInputStream(uri)).use { source ->
+                copy.outputStream().use { target -> source.copyTo(target) }
+            }
+            checkpoint("published-reopened")
+            validateEncoded(copy, count, session.fps, cap)
+            check(decodedFrameCount(copy, count, session.fps) == count) { "Published decoded frame count mismatch; photos retained" }
+            check(findPublished(operation) == uri) { "Publication changed during verification" }
+            PublishedVerification(uri, SessionRepository.sha256(copy), count, session.fps, cap)
+        } finally { check(!copy.exists() || copy.delete()) { "Cannot remove verification cache" } }
+    }
+
+    private fun decodedFrameCount(file: File, expected: Int, fps: Int): Int {
+        val extractor = MediaExtractor()
+        var decoder: MediaCodec? = null
+        try {
+            extractor.setDataSource(file.path)
+            extractor.selectTrack(0)
+            val format = extractor.getTrackFormat(0)
+            val codec = MediaCodec.createDecoderByType(checkNotNull(format.getString(MediaFormat.KEY_MIME)))
+            decoder = codec
+            codec.configure(format, null, null, 0)
+            codec.start()
+            var inputEnded = false
+            var frames = 0
+            val info = MediaCodec.BufferInfo()
+            val deadline = System.nanoTime() + (60L + expected * 2L / fps) * 1_000_000_000L
+            while (System.nanoTime() < deadline) {
+                check(!Thread.currentThread().isInterrupted) { "Verification interrupted" }
+                if (!inputEnded) {
+                    val index = codec.dequeueInputBuffer(10_000)
+                    if (index >= 0) {
+                        val size = extractor.readSampleData(checkNotNull(codec.getInputBuffer(index)), 0)
+                        if (size < 0) {
+                            codec.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputEnded = true
+                        } else {
+                            codec.queueInputBuffer(index, 0, size, extractor.sampleTime, 0)
+                            extractor.advance()
+                        }
+                    }
+                }
+                val index = codec.dequeueOutputBuffer(info, 10_000)
+                if (index >= 0) {
+                    if (info.size > 0) { frames++; check(frames <= expected) { "Extra decoded frame" } }
+                    codec.releaseOutputBuffer(index, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return frames
+                }
+            }
+            error("Published decoder timed out; photos retained")
+        } finally {
+            runCatching { decoder?.stop() }
+            decoder?.release()
+            extractor.release()
         }
     }
 

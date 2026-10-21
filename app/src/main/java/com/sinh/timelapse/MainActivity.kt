@@ -49,6 +49,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var clock: TimestampPreview
     private lateinit var mode: Spinner
     private lateinit var maxSeconds: EditText
+    private lateinit var split: Spinner
+    private lateinit var finish: Button
+    private lateinit var backlog: TextView
+    private var sessionsView: SessionsView? = null
+    private var displayedSession: String? = null
     private lateinit var timestampSettings: Button
     private var appearance = TimestampAppearance()
     private val preferences by lazy { getSharedPreferences("capture-defaults", 0) }
@@ -95,29 +100,40 @@ class MainActivity : ComponentActivity() {
         buildUi()
         model.state.observe(this) { state ->
             val session = state.session
+            if (session == null && displayedSession != null) {
+                val saved = runCatching { SessionSplit.parse(preferences.getString("split", SessionSplit.DEFAULT.storedValue)!!) }
+                    .getOrDefault(SessionSplit.DEFAULT)
+                split.setSelection(SessionSplit.entries.indexOf(saved))
+            }
+            displayedSession = session?.directory?.name
             val selectedFps = session?.fps ?: frameRates[fps.selectedItemPosition]
             val seconds = state.selectedFrames.toDouble() / selectedFps
             val active = state.activeMillis?.let(::duration) ?: if (session == null) "00:00:00" else "unavailable (legacy)"
             statistics.text = String.format(Locale.ROOT,
-                "Active recording: %s%s\nWall span: %s (wall-clock based)\nEstimated video: %.3fs · %d fps\nSelected: %d / %d saved photos · %.1f MiB\nNominal interval: %.3fs · stage %d · missed slots: %d",
+                "Active recording: %s%s\nWall span: %s (wall-clock based)\nEstimated video: %.3fs · %d fps\nSelected: %d / %d saved photos · %.1f MiB\nNominal interval: %.3fs · stage %d · missed slots: %d\nLast shutter gap: %dms · save completion: %dms · switch-to-shutter: %dms",
                 active, if (state.unknownTail) " (last-saved; interruption tail unknown)" else "",
                 duration(state.wallMillis), seconds, selectedFps, state.selectedFrames, state.frames,
-                state.savedBytes / 1048576.0, state.nominalIntervalMillis / 1000.0, state.thinningStage, state.missedSlots)
+                state.savedBytes / 1048576.0, state.nominalIntervalMillis / 1000.0, state.thinningStage, state.missedSlots,
+                state.lastShutterGapMillis, state.lastSaveMillis, state.lastSwitchMillis)
             val message = if (state.exporting) "${state.message} ${state.progress}%"
                 else listOf(state.message, state.cameraMessage).filter { it.isNotEmpty() }.joinToString("\n")
             if (status.text.toString() != message) status.text = message
             capture.text = when {
-                state.capturing -> "Stop capture"
+                state.capturing -> if (session?.split != SessionSplit.OFF) "Pause capture" else "Stop capture"
                 session != null -> "Resume capture"
                 else -> "Start capture"
             }
-            capture.isEnabled = state.capturing || (!state.busy && !state.recoveryBlocked && state.boundLens == state.lens)
-            export.isEnabled = !state.busy && !state.capturing && !state.recoveryBlocked && state.frames > 0
-            export.text = if (state.exporting) "Exporting ${state.progress}%" else "Export MP4"
+            capture.isEnabled = state.capturing || (!state.busy && !state.switching && !state.recoveryBlocked && state.boundLens == state.lens)
+            val automatic = session != null && session.split != SessionSplit.OFF
+            finish.visibility = if (automatic) View.VISIBLE else View.GONE
+            finish.isEnabled = automatic && !state.loading && !state.working && !state.switching && !state.recoveryBlocked
+            export.isEnabled = !automatic && !state.busy && !state.capturing && !state.recoveryBlocked && state.frames > 0
+            export.text = if (automatic) "Automatic export on Finish" else if (state.exporting) "Exporting ${state.progress}%" else "Export MP4"
             discard.isEnabled = !state.busy && !state.capturing && session != null
             open.isEnabled = state.video != null && !state.exporting
             mode.isEnabled = state.canSelectLens
             maxSeconds.isEnabled = state.canSelectLens && mode.selectedItemPosition == 0
+            split.isEnabled = state.canSelectLens && mode.selectedItemPosition == 0
             timestampSettings.isEnabled = state.canSelectLens
             interval.isEnabled = state.canSelectLens && mode.selectedItemPosition == 1
             fps.isEnabled = state.canSelectLens
@@ -127,6 +143,7 @@ class MainActivity : ComponentActivity() {
             recovery.isEnabled = !state.busy
             if (session != null) {
                 mode.setSelection(if (session.configuration is SamplingConfiguration.Adaptive) 0 else 1)
+                split.setSelection(SessionSplit.entries.indexOf(session.split))
                 (session.configuration as? SamplingConfiguration.Adaptive)?.let { maxSeconds.setText(it.maxSeconds.toString()) }
                 clock.appearance = session.appearance
                 interval.setSelection(intervals.indexOf((session.intervalMillis / 1000).toInt()).coerceAtLeast(0))
@@ -136,6 +153,13 @@ class MainActivity : ComponentActivity() {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             bindCamera()
+        }
+        model.sessions.observe(this) { sessions ->
+            sessionsView?.render(sessions)
+            val retained = sessions.sumOf { it.bytes }
+            val attention = sessions.count { it.canRetry }
+            val message = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size, retained / 1048576.0, attention)
+            if (backlog.text.toString() != message) backlog.text = message
         }
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
     }
@@ -220,7 +244,15 @@ class MainActivity : ComponentActivity() {
             contentDescription = "Maximum video duration in seconds, 5 to 600"
         }
         root.addView(maxSeconds)
-        root.addView(label("Cap limits video only, not recording or storage. All completed photos are kept. Thinning can shorten the video estimate. Camera speed is not guaranteed.", 13f))
+        root.addView(label("Adaptive auto-split (active recording time)", 14f))
+        split = spinner(listOf("Off — keep photos, manual export", "2 hours", "3 hours (default)")).apply {
+            contentDescription = "Adaptive automatic session split"
+            val saved = runCatching { SessionSplit.parse(preferences.getString("split", SessionSplit.DEFAULT.storedValue)!!) }
+                .getOrDefault(SessionSplit.DEFAULT)
+            setSelection(SessionSplit.entries.indexOf(saved))
+        }
+        root.addView(split)
+        root.addView(label("With 2h/3h: Pause keeps the session; Finish exports even a short session. Each segment uses its saved video cap. Only after the published video is reopened, decoded and verified are that segment's photos removed. Failed/uncertain exports keep photos. Off/Fixed/older sessions stay manual. Keep the app open; capture speed and bounded storage are not guaranteed.", 13f))
         val settings = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         interval = spinner(intervals.map { "Every ${it}s" }).apply { setSelection(intervals.indexOf(preferences.getInt("interval", 5)).coerceAtLeast(0)) }
         fps = spinner(frameRates.map { "$it fps" }).apply { setSelection(frameRates.indexOf(preferences.getInt("fps", 30)).coerceAtLeast(0)) }
@@ -233,6 +265,7 @@ class MainActivity : ComponentActivity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val enabled = model.state.value?.canSelectLens == true
                 maxSeconds.isEnabled = enabled && position == 0
+                split.isEnabled = enabled && position == 0
                 interval.isEnabled = enabled && position == 1
             }
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -258,9 +291,10 @@ class MainActivity : ComponentActivity() {
                             else SamplingConfiguration.Fixed(intervals[interval.selectedItemPosition], rate)
                         preferences.edit().putBoolean("adaptive", config is SamplingConfiguration.Adaptive)
                             .putInt("maxSeconds", (config as? SamplingConfiguration.Adaptive)?.maxSeconds ?: preferences.getInt("maxSeconds", 30))
-                            .putInt("fps", rate).putInt("interval", intervals[interval.selectedItemPosition]).apply()
+                            .putInt("fps", rate).putInt("interval", intervals[interval.selectedItemPosition])
+                            .putString("split", SessionSplit.entries[split.selectedItemPosition].storedValue).apply()
                         rememberAppearance()
-                        model.start(config, appearance)
+                        model.start(config, appearance, SessionSplit.entries[split.selectedItemPosition])
                     } catch (_: IllegalArgumentException) {
                         maxSeconds.error = "Enter a whole number from 5 to 600"
                         Toast.makeText(this@MainActivity, "Invalid settings; no session created.", Toast.LENGTH_LONG).show()
@@ -269,6 +303,15 @@ class MainActivity : ComponentActivity() {
             }
         }
         root.addView(capture)
+        finish = Button(this).apply {
+            text = "Finish session and export"
+            visibility = View.GONE
+            setOnClickListener { model.finishSession() }
+        }
+        root.addView(finish)
+        backlog = label("Sessions", 14f)
+        root.addView(backlog)
+        root.addView(Button(this).apply { text = "Sessions…"; setOnClickListener { showSessions() } })
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         export = Button(this).apply { text = "Export MP4"; setOnClickListener { model.export() } }
         open = Button(this).apply { text = "Open last video"; setOnClickListener { openVideo() } }
@@ -278,11 +321,12 @@ class MainActivity : ComponentActivity() {
         discard = Button(this).apply {
             text = "Delete photos / New session"
             setOnClickListener {
+                val selectedId = model.state.value?.session?.directory?.name ?: return@setOnClickListener
                 AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Delete session photos?")
-                    .setMessage("This removes all photos in the current session so you can start a new one. Exported videos are not deleted.")
+                    .setTitle("Delete source photos?")
+                    .setMessage("Session $selectedId\nRemove only this session's inventoried photos and cancel its queued work so you can start a new one. Exported videos are not deleted. Unknown files stop deletion.")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete photos") { _, _ -> model.discard() }
+                    .setPositiveButton("Delete photos") { _, _ -> model.deleteSessionSources(selectedId) }
                     .show()
             }
         }
@@ -402,15 +446,40 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    private fun showSessions() {
+        if (sessionsView != null) return
+        val view = SessionsView(this,
+            open = { review -> model.openSessionVideo(review.id) { uri ->
+                if (!isDestroyed) {
+                    if (uri == null) Toast.makeText(this, "This session's output is missing or unreadable. Sources are not deleted to repair it.", Toast.LENGTH_LONG).show()
+                    else openVideoUri(uri)
+                }
+            } },
+            retry = { model.retrySession(it.id) },
+            delete = { review ->
+                AlertDialog.Builder(this).setTitle("Delete source photos?")
+                    .setMessage("Session ${review.id}\nDelete ${review.retained} retained source photos and cancel its queued work? Its published video and other sessions are unchanged. This cannot be undone; unknown files stop deletion.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete source photos") { _, _ -> model.deleteSessionSources(review.id) }.show()
+            })
+        sessionsView = view
+        view.render(model.sessions.value.orEmpty())
+        AlertDialog.Builder(this).setTitle("Sessions").setView(view).setPositiveButton("Close", null)
+            .create().apply { setOnDismissListener { sessionsView = null }; show() }
+    }
+
     private fun openVideo() {
-        val uri = model.state.value?.video ?: return
+        model.state.value?.video?.let(::openVideoUri)
+    }
+
+    private fun openVideoUri(uri: android.net.Uri) {
         try {
             startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, "No video player installed. Find the MP4 in Movies/TimestampTimelapse.", Toast.LENGTH_LONG).show()
         } catch (_: SecurityException) {
-            Toast.makeText(this, "Video is no longer available. Export it again.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Video is no longer available. See Sessions; photos already removed cannot be restored.", Toast.LENGTH_LONG).show()
         }
     }
 
