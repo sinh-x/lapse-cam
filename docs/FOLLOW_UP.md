@@ -1,3 +1,173 @@
+## TTL-005 owner-directed local integration and closeout (2026-10-21)
+
+Sinh selected **"Commit, merge into develop, and close TTL-005"**, then explicitly instructed **"merge to develop and wrap ticke done, session log + registry"**. Authorization is durably recorded in TTL-005 `c-20261021200436743`. This supersedes the earlier no-commit/no-merge/no-closure handoff restrictions for this local wrap-up, and is an explicit exception to the repository's default main-targeted merge policy. It does not authorize a push, main update, branch/checkout deletion or checkout return.
+
+The implementation and passing sidecar fix below are the integration scope: host50/50, OPPO53/53, validator19/19, TTL-010 helper21/21, both APKs and lint0 errors/26 unsuppressed warnings. Final actual feature/merge SHA, ticket closure and registry receipts are recorded outside this commit to avoid self-referential hashes:
+- Session log: `sessions/2026/10/agent-team/2026-10-21-d-d6243e-rogue-one--TTL-005--session-rollover.md`.
+- Closeout report: `agent-teams/builder/artifacts/TTL-005/2026-10-21-d-d6243e-closeout.md`.
+
+**Owner-directed administrative closure is not full technical acceptance.** Independent matrix/review, CI, mandatory Pixel and formal human UAT remain pending. Original failed OPPO48/49 evidence and subsequent passing53/53 evidence are retained; no failed assertion was removed or tolerance weakened. The chronological uncommitted/not-merged statements below describe those earlier stages rather than the later owner direction. Feature branch/worktree and safety stash are retained; no further device operation follows from wrap-up.
+
+---
+
+## TTL-005 sidecar fix and passing OPPO rerun (2026-10-21)
+
+*Historical verification stage before the later owner-directed commit/integration/closure above.*
+
+**The observed failure is fixed; host50/50 and OPPO53/53 pass.** Source remains uncommitted on `feature/TTL-005-session-rollover`, HEAD/base `cf4e76deeca9dffc2d2f0df8cab63c7e36f9d4c3`. Sinh requested the fix, then separately approved one full OPPO rerun with the same disposable-context/no-uninstall/fixture-only boundary and stopped other IDE/Gradle/cache writers. This is supplementary implementation verification, not independent matrix/CI/Pixel/human UAT or ticket/release acceptance.
+
+### Fix and regression contract
+
+- Root cause: split-session close replayed every intent-looking file before distinguishing a genuinely reserved frame from an unknown sidecar. The deliberately malformed unreserved `intent_999999.json` therefore aborted closure instead of remaining outside the source inventory.
+- Added pure `SessionIntentPolicy.isReservedSidecar`: only canonical decimal `intent_<id>.json` (or its AtomicFile `.bak`) with `0 <= id < progress.nextId` qualifies for replay. Overflowing IDs, leading-zero aliases, unreserved IDs and malformed names have no provenance authority.
+- In explicitly opted-in split sessions, `recoverProgress` leaves those unreserved/lookalike sidecars untouched and does not parse or adopt them. Existing strict parsing, replay/checkpoint equality, selected IDs/count/bytes/stage checks and unknown-completed-JPEG rejection remain. Corrupt or missing **reserved** intent metadata still fails recovery. Off/Fixed/manual recovery retains its original strict behavior.
+- `ownsSource` applies the same reservation/canonical-name gate before reading a sidecar, preventing lookalike aliases from entering a frozen deletion inventory. Unknown files and aliases still block the entire affected cleanup step before its first unlink; there is no exception to receipt/output verification or source ownership checks.
+- Added a pre-reservation collision guard for the next intent basename, `.bak` and `.new`, including dangling symlinks. It runs **before** advancing/persisting `nextId`; a future capture cannot overwrite an earlier quarantined unknown file or accidentally promote it into owned provenance.
+- Production changes are confined to `SessionStore.kt` and the pure policy in `SessionLifecycle.kt`. No close/recovery bypass, catch-and-ignore of reserved metadata, new deletion target, encoder change, assertion/tolerance weakening, dependency/pin/manifest/permission change or download.
+- The original failing method is retained and strengthened with closed-state/operation recovery and source/sidecar byte-invariance assertions. Added one host method for canonical/high-water/overflow boundaries and four Android methods covering interrupted CLOSING/repeated recovery/successor saving, unknown-file cleanup rejection, reserved-corruption/missing provenance/unattributed JPEG refusal, manual-mode compatibility, and future-reservation collisions/dangling links. All prior49 Android identities remain and now execute alongside four additions.
+
+### Fresh outcomes
+
+| Check | Actual result |
+|---|---|
+| Offline host/build/lint with `--rerun-tasks` | **Exit0**; **50/50 host**, no failures/errors/skips; both APKs built; lint **0 errors / 26 warnings** |
+| TTL-005 result-accounting self-tests | **19 passed**; no failures/errors/skips |
+| Updated-develop TTL-010 offline self-tests | **21 passed**; fixture-only, production CLI still intentionally partial |
+| Authorized full OPPO suite | **Exit0**, no timeout; **53/53 methods exactly once**, failures/errors/skips0; all five source classes included |
+| Original failure | `lookalikeSidecarNeverBecomesDeletionAuthority` passed with its cleanup rejection and preservation assertions reached |
+| Baseline preservation | Original42 host and32 Android methods remain and pass; strict repeated-export/encoder assertions unchanged |
+| Source and installed APK binding | All42 compiled/test/tool/pin inputs unchanged during execution; both installed APK hashes match the local built files |
+| Independent matrix / CI / mandatory Pixel / human UAT | Not run; remain separate pending gates |
+
+The OPPO was freshly asserted as exactly one authorized **CPH2699 / Android16 / API36 / CPH2699_16.0.5.1200(EX01)** immediately before the run, with the serial retained only privately. Locked offline Nix ADB and SDK ADB37.0.0/protocol41 matched the existing server without restarting it. The native offline `:app:connectedDebugAndroidTest --rerun-tasks` invocation selected all source classes and retained **both** `android.injected.androidTest.leaveApksInstalledAfterRun=true` and `android.experimental.testOptions.uninstallIncompatibleApks=false`. No app-data clear/uninstall, real-camera capture, unrelated-media deletion, network/tool provisioning or automatic extra device attempt. Only authorized self-owned test fixtures were created/deleted.
+
+Restricted new evidence root: **`/tmp/ttl005-sidecar-fix-zn7z1yxk/`** (mode0700). `before-source/`, `before.json` and `fix.patch` retain the exact fix delta; `tested-inputs.json` binds all compiled/tool inputs. `host.log`, `host-start`, `host-accounting.json`, `device.log`, `device-start`, `device-execution.json`, `outcomes.json` and `installed-apks.json` retain raw checks and exact method/byte accounting. `host-artifacts/` and `after-device/` retain APK/XML/lint/HTML outputs. Old connected failure outputs were moved intact to `prior-failed-connected/` before this run; their original independent copy remains in **`/tmp/ttl005-oppo-6h7vd78h/`**. Preserve both temporary evidence roots; generated HTML was not observed in a browser/Obsidian and these are not canonical PA settlement reports.
+
+Latest APK SHA-256 (installed/local equality verified):
+- Debug: `cd95d859b1ee56582c5f156061ea298d01f9ece7dbc99000aac5d57e042950af`.
+- AndroidTest: `4a6069c5d75713a8f0ed87bb144b42bebb4a85cc618aa40cc9fab374919b71c0`.
+
+Lint warning counts/rationales remain unchanged: orientation1 + discouraged API1 + backup policy1 + explicit-API/KTX style9 + English/localization14. No suppressions were added; independent disposition and actual accessible-control/hardware UAT remain pending. The older48/49 failure and earlier unrun states below are retained history, not the current result. No new frozen Feature SHA, commit, merge, push or checkout return was performed.
+
+---
+
+## TTL-005 rebase and full OPPO run (2026-10-21)
+
+*Historical first OPPO run; its one failure is retained below and fixed/verified in the later section above.*
+
+**Rebased; full test run completed with one retained failure.** Sinh requested rebasing onto updated develop and full tests on the connected OPPO, then explicitly confirmed the disposable app/test context, fixture/install effects, no clear/uninstall/unrelated-media changes and stopped other IDE/Gradle/cache writers.
+
+### Rebase and preservation
+
+- Branch remains `feature/TTL-005-session-rollover`; HEAD/base is now local develop **`cf4e76deeca9dffc2d2f0df8cab63c7e36f9d4c3`**, incorporating TTL-010 documentation and `tools/ttl010_validation.py`. Develop introduced no Kotlin/manifest/dependency/pin changes.
+- The feature had no implementation commits, so its uncommitted overlay was preserved, the branch rebased/advanced, then that overlay restored. All application/test/tool/README bytes matched the pre-rebase inventory; `docs/FOLLOW_UP.md` merged automatically with both histories retained. No source assertion or tolerance was changed to obtain these results. Only current-result documentation was edited afterward.
+- Retained stash: **`18702c5535e56a2203283103b2f9c9275df4926f`**. A transient index lock interrupted the stash's cleanup after saving; it disappeared without removal. Exact stash/backup/worktree hashes were verified before restoring only the six saved tracked paths for rebase. All nine untracked implementation files were restored as well. No force reset, lock-file deletion, source loss, merge/push or checkout return.
+- Restricted evidence/backup root: **`/tmp/ttl005-oppo-6h7vd78h/`** (mode0700). `before.json`, `before.patch`, `source-before.tar.gz`, `after-rebase.json` and `tested-inputs.json` retain source state. Historical host/APK/lint/connected outputs were copied to `before-artifacts`; original connected directories were moved to `pre-run-connected` before this fresh run. Current raw outputs are copied under `after-artifacts`. Preserve this temporary evidence before cleanup; it is not canonical PA publication.
+- This is HEAD plus a raw-hash-bound **uncommitted overlay**, not a frozen reviewed Feature SHA. All42 compiled/test/tool/pin inputs remained unchanged throughout host and device execution. The separate TTL-010 helper remains intentionally partial; only its offline `selftest` was invoked, not its blocked production CLI stages.
+
+### Actual full validation outcomes
+
+Existing full JDK17/SDK36/build-tools35.0.0 and locked offline Nix ADB were retained. SDK and locked ADB clients were37.0.0/protocol41, with the existing server verified protocol41 without restarting it. Immediately before installation, exactly one authorized device matched **CPH2699 / Android16 / API36 / CPH2699_16.0.5.1200(EX01)**; the explicitly selected serial was not printed. This is supplementary OPPO validation, not Pixel acceptance.
+
+| Check | Result |
+|---|---|
+| `tools/verify_session_results.py --self-test` | **19 passed**, failures/errors/skips0 |
+| Updated-develop `tools/ttl010_validation.py selftest` | **21 passed**, failures/errors/skips0; fixture-only, production runner still incomplete |
+| Offline host + both APK builds + lint, `--rerun-tasks` | **Exit0**; host49/49 exactly once, failures/errors/skips0; both APKs built; lint0 errors/26 unsuppressed warnings |
+| Full connected suite (all five source test classes) | **Exit1**, no timeout; **49 executed, 48 passed, 1 failed, 0 errors/skips**, exact complete source method set and no duplicates |
+| Original baseline Android methods | **32/32 passed**; existing repeated-export media assertions retained, no encoder mismatch surfaced in this run |
+| App/test APK preservation | Both remain installed; installed SHA-256 independently equals the local built APK bytes |
+| App source/pins across rebase and run | Unchanged, except addition of develop's separate validator; no application/test/tool fix applied after the failed run |
+| Independent matrix / CI / mandatory Pixel / human UAT | Not run; no overall acceptance or ticket closure |
+
+Connected invocation used the pinned native `:app:connectedDebugAndroidTest` with `--offline --no-daemon --console=plain --rerun-tasks`, SDK downloads disabled, every source class selected (AdaptiveSession, MediaPipeline, SessionExportQueue, SessionRollover, TimestampAppearance), and **both** preservation flags:
+
+```text
+-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+-Pandroid.experimental.testOptions.uninstallIncompatibleApks=false
+```
+
+Fresh markers/logs: `host-start`, `host.log`, `device-start`, `device.log`, `device-execution.json` under the restricted evidence root; `outcomes.json` records complete method-set accounting, original failure stack and APK/lint outcomes. `installed-apks.json` records hash equality. Serial-bearing raw files remain restricted; displayed logs were redacted. No package uninstall/data clear, real-camera capture, unrelated-media sweep, network/download, shared-server restart or automatic second device invocation occurred. Tests did create/delete their own authorized cache/MediaStore fixtures.
+
+APK SHA-256 (both installed and built):
+- Debug: `83fc1564d268ddafa33553f35129c83f982dc1b88adf216c6ec93e41b660822c`.
+- AndroidTest: `8cfe578ee10d6e5429eec5715f5aa27e13a124620ab21a8352d1d264ab0dc456`.
+
+### Retained failure — no assertion weakening or automatic retry
+
+`SessionExportQueueTest.lookalikeSidecarNeverBecomesDeletionAuthority` failed at its `repo.close(session, false)` call (test line189), **before the cleanup assertions**. `SessionRepository.finishClose` calls `session(record, true)` (line139), which invokes full `SessionStore.recoverProgress`. That recovery enumerates every numeric `intent_*.json` sidecar and attempts to parse the deliberately unattributed fixture file `intent_999999.json`. Its literal `unattributed` contents trigger `org.json.JSONException` at `readIntent`/`readJson`; `SessionStore.load` wraps it as a retained-session recovery error (line151).
+
+This is an early closure/recovery rejection, not an observed unverified-photo deletion or recurrence of the encoder issue. However, it does **not** prove the intended flow where the unknown sidecar is excluded from inventory and later blocks only cleanup. Resolve that close/recovery versus unknown-sidecar contract without weakening provenance/deletion checks, then obtain a new bounded device rerun. The fixture teardown removes only its allocated cache root; no unrelated phone data was a deletion target. The original failing XML/logs and installed candidate are preserved. The all-green independent result validator must reject this failed suite; no V6 pass/report was generated.
+
+Next work: fix/reconcile this one new safety-edge failure; rerun the complete suite with fresh output directories under new authorization; then independent review/CI, mandatory Pixel and all16 physical UAT scenarios. TTL-010's owner-directed administrative closeout now appears in develop below, but it does not prove the encoder's unknown cause was fixed.
+
+---
+
+## TTL-005 implementation-phase handoff (2026-10-21)
+
+*Historical initial handoff, before the rebase and OPPO authorization/run above; its unrun/initial-base statements describe that earlier stage.*
+
+**Implementation present, uncommitted; device validation and acceptance pending.** Work is confined to the selected `feature/TTL-005-session-rollover` checkout, based on `4b4a6ee17492035c9f41a91b02fd93d5ff3f89f0`. There is no new frozen Feature SHA yet. The earlier PA command-transport blocker was not repaired or bypassed by disabling controls; this session used the supplied rogue-one runtime's normal repository tools and retained audit/safety boundaries. No implementation acceptance, merge, push, checkout return or ticket closure is asserted.
+
+Approved scope source: `agent-teams/requirements/artifacts/2026-10-21-ttl-005-session-rollover.md`, approval `c-20261021103657484`, paired 16-scenario UAT of the same date. Those external documents remain authoritative; this is a local implementation handoff, not a replacement matrix or signed UAT result.
+
+### Delivered source surfaces
+
+- `SessionLifecycle.kt`: explicit Off/2h/3h split values, strict boundary admission, drain/Finish gate, reserved three-attempt cycles with eligible-time 10s/30s delays, and allocation-free fair scanning over compact queue metadata.
+- `SessionStore.kt`: additive opt-in fields on new v3 headers, frozen successor zone/settings, exact loading/exclusions, historical summaries without retaining historical selectors, source provenance checks and selector-cache release. Missing lifecycle fields mean manual, never the current UI default. Unknown schema/split values block recovery. Existing sampling math, renderer and encoder format are unchanged.
+- `SessionRepository.kt`: atomic compact index, durable successor intent before allocation, atomic closure/successor/queue publication, immutable selected-source manifest and hashed source inventory. Repeated closure resumes the same identity. Missing/contradictory index or an unindexed nonempty/closed session is retained and blocked rather than assigned a new publication identity.
+- `CaptureViewModel.kt`: independent 1Hz boundary check plus checks before shutter admission, at-most-one pre-boundary in-flight completion in its original folder, Pause/Finish distinction and paused recovery. Separate serial file/transition and media executors let successor capture proceed during export. Duplicate camera callbacks are ignored. Low-space cutoff remains 50MiB; no automatic capture resume.
+- `VideoExporter.kt` / `SessionExportQueue.kt`: exact stable-operation lookup before re-encoding; persisted reservation before effects; fair app-open queue; published Gallery ownership/name/path/nonpending checks, reopened-byte track/sample/PTS/duration/cap validation and complete decode count. A durable receipt binds session/operation, selection/inventory hashes, fps/cap, exact URI and output SHA-256. A cleanup failure never re-encodes that proven output.
+- Cleanup only touches exact inventoried JPEGs and known frame intents. Aliases, unknown/lookalike files, changed sources, contradictory receipts or missing/changed output stop the affected cleanup. A pending-delete checkpoint precedes each unlink; a later checkpoint records completion. Each owner step removes at most 16 inventory entries; resumed steps reverify the same output on the media worker. Completed records compact source metadata, retaining the header, index summary and verified receipt. Partial cleanup cannot restore already removed photos if the video is later removed/damaged.
+- `MainActivity.kt`, `SessionReview.kt`, `SessionsView.kt`: remembered future-session split choice (default 3h), separate Pause/Finish controls, backlog and stable native review rows, exact Open, Retry and session-named source Delete/Cancel. Current/busy work cannot be deleted. A confirmed manual deletion cancels eligibility durably and leaves every video/other session alone. Off/Fixed/legacy are not automatically exported, converted or opted into cleanup. Historical exports without a per-session URI are not guessed from timestamps.
+- HUD reports last shutter gap, save-completion latency and boundary-to-next-shutter latency. Queue log tag `SessionExportQueue` records operation-bound media-step time (encoding/publication/verification together, or cleanup verification). These are measurement hooks, **not measured Pixel performance claims**.
+- `SessionLifecycleTest`, `SessionRolloverTest`, `SessionExportQueueTest`: additive tests; all 42 baseline host and 32 baseline Android methods preserved. New Android fixtures cover closure checkpoints, live fake-time model boundary/drain, stale callbacks, queue concurrency/fairness/retries/restart, receipt/inventory/alias safety, exact publication corruption, manual deletion and a real native view at 360dp/200% font scale. They are compiled, not executed here; exception injection is not real process-kill/reboot proof.
+- `tools/verify_session_results.py`: standard-library-only report validator and self-tests. It checks baseline/source method inventories (including Kotlin backticks), exact fresh XML sets/counters, duplicate/missing/stale/failed/skipped reports, nested Android outputs, DTD/entity rejection, APK/lint freshness, unchanged clean candidate and matrix bindings, then exclusively creates absent `results.json`. It does not invoke Gradle/ADB, provision a runtime, operate a phone or certify human UAT.
+
+### Actual local phase checks
+
+Common environment was the existing full JDK17 at `/nix/store/04cqkgis3i4b0fm42h5s77i96dp9gmyg-openjdk-17.0.20+2`, SDK `/home/sinh/android-sdk-writable`; every Gradle invocation used `--offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false` and `--rerun-tasks`. No dependency, SDK, manifest, permission, runner or lock changes/downloads were made.
+
+| Check | Observed result / limit |
+|---|---|
+| P1 focused AdaptiveSampling/SessionContract/SessionLifecycle host tests | Exit0; original literal shell environment used, no launcher sanitation workaround |
+| P2/P3 host + both APK builds | Exit0; Android source compilation only |
+| P4 APK builds + lint | Exit0; actual UI walkthrough not performed |
+| Final P5 host + both APK builds + lint | Exit0; **49 host methods exactly once**, failures/errors/skips0; both APKs assembled |
+| Host source/XML accounting | Exact fresh source-method equality; original 42 baseline methods preserved |
+| Android source inventory | **49 compiled methods** = original32 + SessionRollover6 + SessionExportQueue11; **0 executed in this deployment** |
+| Python validator self-tests | **19 passed**, failures/errors/skips0; main independent V6 report not generated |
+| Lint | **0 errors / 26 warnings**, unsuppressed; proposed dispositions below |
+| Whitespace | `git diff --check` passes |
+| Independent V1–V7 / CI / Pixel install / physical UAT | **Not run**; all16 UAT scenarios remain pending |
+
+Local outputs are ignored build products under `app/build/test-results/testDebugUnitTest/`, `app/build/reports/`, and `app/build/outputs/apk/`. Latest native phase log/marker: `/tmp/ttl005-handoff.log` and `/tmp/ttl005-last-start`; preceding successful final rerun: `/tmp/ttl005-last.log`; earlier successful phase logs: `/tmp/ttl005-p1.log`, `ttl005-p2.log`, `ttl005-p3a.log`, `ttl005-p3.log`, `ttl005-p4.log`, `ttl005-p5.log`, `ttl005-final.log`. These temporary files are not durable PA publication; preserve them through the owning workflow before cleanup. No project build/test failure was suppressed; all executed phase invocations exited0. Generated HTML was not opened/observed in a browser or Obsidian.
+
+Latest built APK SHA-256 (local uncommitted source, not an installed/frozen reviewed candidate):
+- Debug: `83fc1564d268ddafa33553f35129c83f982dc1b88adf216c6ec93e41b660822c`.
+- AndroidTest: `8cfe578ee10d6e5429eec5715f5aa27e13a124620ab21a8352d1d264ab0dc456`.
+
+Lint dispositions proposed for independent review:
+
+| ID | Count | Rationale / remaining debt |
+|---|---:|---|
+| LockedOrientationActivity / DiscouragedApi | 1 / 1 | Unchanged portrait output/activity contract; large-screen/rotation UAT still required |
+| DataExtractionRules | 1 | Existing `allowBackup=false`; explicit device-transfer policy is pre-existing follow-up, not changed here |
+| UseKtx | 9 | Style suggestions; explicit Android APIs retained without new dependencies or suppressions |
+| SetTextI18n | 14 | Existing English prototype/localization debt plus labeled new controls; strict ASCII cap entry is intentional. Real large-font/TalkBack operability is not proven by compilation |
+
+Gradle's deprecated-feature/Gradle9 compatibility notice remains; no toolchain migration was attempted. These are implementer rationales, not independent warning acceptance or a Critical/Major review result.
+
+### Remaining gates and limits
+
+1. Freeze/commit a candidate only through the operator's chosen workflow, then obtain the requirements-owned independent review/runtime/toolchain/device gates and run the seven-command matrix in its distinct review checkout. Do not relabel these local phase checks as V1–V7 or run the validator against stale historical Android results.
+2. Freshly authorize an isolated Pixel8Pro/GrapheneOS API37/build2026100601 context and the exact no-uninstall wrapper before installation/instrumentation. **No ADB/device discovery, install, phone fixture, source deletion or Gallery mutation occurred here.** No OPPO substitution, background service or background-completion promise.
+3. Execute all49 Android methods and all16 physical UAT scenarios, including both lenses, actual Gallery playback, publication/cleanup/process interruptions, concurrent latency/cadence, large retained disk backlog, low-space injection and 360dp/200% font-scale/TalkBack controls. The 100,000-entry pure fairness test does not prove physical backlog I/O latency. Real main-loop stalls can delay the 1Hz runnable; no hard hardware switching-gap guarantee is claimed.
+4. Inspect original TTL-010 encoder failures below. The strict encoder assertions/tolerances and all original Android test methods are unchanged; this implementation does not diagnose or close TTL-010. Any publication/verification failure retains remaining sources and exhausts only its bounded cycle.
+5. Keep independent review/CI, formal human acceptance, merge and checkout lifecycle separate. Unrun UAT is not passed, and the current dirty worktree is not an immutable reviewed release candidate.
+
+---
+
 # TTL-004: implementation candidate → independent review / UAT
 
 ## TTL-010 owner-directed closeout (2026-10-21; d-43fa80)
