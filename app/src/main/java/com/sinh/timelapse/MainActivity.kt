@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
     private var displayedSession: String? = null
     private lateinit var timestampSettings: Button
     private var appearance = TimestampAppearance()
-    private val preferences by lazy { getSharedPreferences("capture-defaults", 0) }
+    private val defaults by lazy { CaptureDefaults(getSharedPreferences("capture-defaults", 0)) }
     private lateinit var status: TextView
     private lateinit var statistics: TextView
     private lateinit var interval: Spinner
@@ -101,9 +101,7 @@ class MainActivity : ComponentActivity() {
         model.state.observe(this) { state ->
             val session = state.session
             if (session == null && displayedSession != null) {
-                val saved = runCatching { SessionSplit.parse(preferences.getString("split", SessionSplit.DEFAULT.storedValue)!!) }
-                    .getOrDefault(SessionSplit.DEFAULT)
-                split.setSelection(SessionSplit.entries.indexOf(saved))
+                split.setSelection(SessionSplit.entries.indexOf(defaults.split))
             }
             displayedSession = session?.directory?.name
             val selectedFps = session?.fps ?: frameRates[fps.selectedItemPosition]
@@ -184,11 +182,7 @@ class MainActivity : ComponentActivity() {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
         videoFrame.addView(preview, FrameLayout.LayoutParams(-1, -1))
-        appearance = runCatching {
-            TimestampAppearance(StampFamily.valueOf(preferences.getString("family", "MONOSPACE")!!),
-                preferences.getBoolean("bold", true), preferences.getInt("size", 44),
-                StampPosition.valueOf(preferences.getString("position", "BOTTOM_LEFT")!!), preferences.getBoolean("date", false))
-        }.getOrDefault(TimestampAppearance())
+        appearance = defaults.appearance()
         clock = TimestampPreview(this).apply { appearance = this@MainActivity.appearance }
         videoFrame.addView(clock, FrameLayout.LayoutParams(-1, -1))
         previewContainer.addView(videoFrame, FrameLayout.LayoutParams(0, 0, Gravity.CENTER))
@@ -233,13 +227,13 @@ class MainActivity : ComponentActivity() {
         root.addView(label("New-session settings (locked after Start)", 16f))
         mode = spinner(listOf("Adaptive — capped video", "Fixed interval — uncapped video")).apply {
             contentDescription = "Capture mode"
-            setSelection(if (preferences.getBoolean("adaptive", true)) 0 else 1)
+            setSelection(if (defaults.adaptive) 0 else 1)
         }
         root.addView(mode)
         root.addView(label("Maximum Adaptive video seconds (whole number 5–600)", 14f))
         maxSeconds = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
-            setText(preferences.getInt("maxSeconds", 30).toString())
+            setText(defaults.maxSeconds.toString())
             setTextColor(Color.WHITE)
             contentDescription = "Maximum video duration in seconds, 5 to 600"
         }
@@ -247,15 +241,13 @@ class MainActivity : ComponentActivity() {
         root.addView(label("Adaptive auto-split (active recording time)", 14f))
         split = spinner(listOf("Off — keep photos, manual export", "2 hours", "3 hours (default)")).apply {
             contentDescription = "Adaptive automatic session split"
-            val saved = runCatching { SessionSplit.parse(preferences.getString("split", SessionSplit.DEFAULT.storedValue)!!) }
-                .getOrDefault(SessionSplit.DEFAULT)
-            setSelection(SessionSplit.entries.indexOf(saved))
+            setSelection(SessionSplit.entries.indexOf(defaults.split))
         }
         root.addView(split)
         root.addView(label("With 2h/3h: Pause keeps the session; Finish exports even a short session. Each segment uses its saved video cap. Only after the published video is reopened, decoded and verified are that segment's photos removed. Failed/uncertain exports keep photos. Off/Fixed/older sessions stay manual. Keep the app open; capture speed and bounded storage are not guaranteed.", 13f))
         val settings = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        interval = spinner(intervals.map { "Every ${it}s" }).apply { setSelection(intervals.indexOf(preferences.getInt("interval", 5)).coerceAtLeast(0)) }
-        fps = spinner(frameRates.map { "$it fps" }).apply { setSelection(frameRates.indexOf(preferences.getInt("fps", 30)).coerceAtLeast(0)) }
+        interval = spinner(intervals.map { "Every ${it}s" }).apply { setSelection(intervals.indexOf(defaults.interval).coerceAtLeast(0)) }
+        fps = spinner(frameRates.map { "$it fps" }).apply { setSelection(frameRates.indexOf(defaults.fps).coerceAtLeast(0)) }
         interval.contentDescription = "Photo capture interval"
         fps.contentDescription = "Export frames per second"
         settings.addView(interval, LinearLayout.LayoutParams(-1, -2))
@@ -289,10 +281,7 @@ class MainActivity : ComponentActivity() {
                         val rate = frameRates[fps.selectedItemPosition]
                         val config = if (mode.selectedItemPosition == 0) SamplingConfiguration.parseAdaptive(maxSeconds.text.toString(), rate.toString())
                             else SamplingConfiguration.Fixed(intervals[interval.selectedItemPosition], rate)
-                        preferences.edit().putBoolean("adaptive", config is SamplingConfiguration.Adaptive)
-                            .putInt("maxSeconds", (config as? SamplingConfiguration.Adaptive)?.maxSeconds ?: preferences.getInt("maxSeconds", 30))
-                            .putInt("fps", rate).putInt("interval", intervals[interval.selectedItemPosition])
-                            .putString("split", SessionSplit.entries[split.selectedItemPosition].storedValue).apply()
+                        defaults.rememberCapture(config, intervals[interval.selectedItemPosition], SessionSplit.entries[split.selectedItemPosition])
                         rememberAppearance()
                         model.start(config, appearance, SessionSplit.entries[split.selectedItemPosition])
                     } catch (_: IllegalArgumentException) {
@@ -342,9 +331,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun rememberAppearance() {
-        preferences.edit().putString("family", appearance.family.name).putBoolean("bold", appearance.bold)
-            .putInt("size", appearance.size).putString("position", appearance.position.name)
-            .putBoolean("date", appearance.date).apply()
+        defaults.rememberAppearance(appearance)
     }
 
     private fun showTimestampSettings() {
