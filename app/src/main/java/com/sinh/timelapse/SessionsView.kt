@@ -17,6 +17,8 @@ class SessionsView(
     private val open: (SessionReview) -> Unit,
     private val retry: (SessionReview) -> Unit,
     private val delete: (SessionReview) -> Unit,
+    private val linkedWork: (String) -> Unit = {},
+    private val linkSummary: (String) -> String = { "Linked timeboxes: 0" },
 ) : ScrollView(context) {
     constructor(context: Context) : this(context, {}, {}, {})
 
@@ -34,11 +36,13 @@ class SessionsView(
         val openButton = button("Open video") { open(review) }
         val retryButton = button("Retry") { retry(review) }
         val deleteButton = button("Delete source photos…") { delete(review) }
+        val linksButton = button("Linked timeboxes") { linkedWork(review.id) }
         init {
             panel.addView(details)
             panel.addView(openButton)
             panel.addView(retryButton)
             panel.addView(deleteButton)
+            panel.addView(linksButton)
         }
         fun render(value: SessionReview) {
             review = value
@@ -55,6 +59,8 @@ class SessionsView(
                 value.status, if (value.progress > 0) " · ${value.progress}%" else "", value.attempts, value.cleanupAttempts,
                 if (value.error.isEmpty()) "" else "\n${value.error}")
             if (details.text.toString() != message) details.text = message
+            linksButton.text = linkSummary(value.id)
+            linksButton.contentDescription = "Linked timeboxes for session ${value.id}"
             openButton.isEnabled = value.output != null
             retryButton.isEnabled = value.canRetry
             deleteButton.isEnabled = value.canDelete

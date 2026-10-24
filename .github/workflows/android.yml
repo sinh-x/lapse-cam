@@ -1,0 +1,84 @@
+name: Android checks
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FEATURE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      # Upstream tags verified with git ls-remote during TTL-011 implementation.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2, actions/checkout refs/tags/v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ env.FEATURE_SHA }}
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1, actions/setup-java refs/tags/v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17.0.16+8'
+      - name: Install and verify approved SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FEATURE_SHA"
+          mkdir -p app/build/ci
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if ! test -x "$sdkmanager_bin"; then
+            sdkmanager_bin="$(find "$ANDROID_HOME/cmdline-tools" -mindepth 3 -maxdepth 3 -type f -name sdkmanager | sort -V | tail -n 1)"
+          fi
+          test -n "$sdkmanager_bin" && test -x "$sdkmanager_bin"
+          export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"
+          printf 'ANDROID_HOME=%s\n' "$ANDROID_HOME" >> "$GITHUB_ENV"
+          printf '%s\n' "$(dirname "$sdkmanager_bin")" "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          printf 'SDK manager: %s\n' "$sdkmanager_bin" | tee app/build/ci/sdk-setup.log
+          sdkmanager --version 2>&1 | tee -a app/build/ci/sdk-setup.log
+          sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 2>&1 | tee -a app/build/ci/sdk-setup.log
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          {
+            printf 'repository=%s\nrun_id=%s\nattempt=%s\nevent=%s\nfeature_sha=%s\nworkflow_sha=%s\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" "$FEATURE_SHA" "$GITHUB_WORKFLOW_SHA"
+            printf 'runner=%s/%s/%s\nimage_version=%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion"
+            java -version 2>&1
+            javac -version
+            sdkmanager --list_installed
+            sha256sum .github/workflows/android.yml gradle/wrapper/gradle-wrapper.properties
+          } | tee app/build/ci/environment.txt
+      - name: Host checks, both debug APKs and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify_session_results.py --self-test 2>&1 | tee app/build/ci/session-accounting.log
+          python3 tools/verify_timebox_results.py --self-test 2>&1 | tee app/build/ci/timebox-accounting.log
+          ./gradlew --no-daemon --console=plain -Pandroid.builder.sdkDownload=false \
+            :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug \
+            2>&1 | tee app/build/ci/gradle.log
+      - name: Artifact digests (including partial/failure evidence)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/build/ci app/build/outputs app/build/reports app/build/test-results
+          find app/build/outputs app/build/reports app/build/test-results -type f -print0 \
+            | sort -z | xargs -0 -r sha256sum > app/build/ci/artifacts.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, actions/upload-artifact refs/tags/v4.6.2
+        if: always()
+        with:
+          name: android-${{ env.FEATURE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            app/build/ci/
+            app/build/test-results/
+            app/build/reports/
+            app/build/outputs/

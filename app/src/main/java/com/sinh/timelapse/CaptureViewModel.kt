@@ -27,6 +27,7 @@ class CaptureViewModel @JvmOverloads constructor(
     },
     private val monotonicMillis: () -> Long = { SystemClock.elapsedRealtime() },
     private val epochMillis: () -> Long = { System.currentTimeMillis() },
+    private val workContext: WorkSessionCoordinator? = if (filesDirectory == application.filesDir) WorkSessionCoordinator.get(application) else null,
 ) : AndroidViewModel(application) {
     data class State(
         val loading: Boolean = true,
@@ -84,6 +85,8 @@ class CaptureViewModel @JvmOverloads constructor(
     private var lastShutter = 0L
     private var switchingSince: Long? = null
     private var photoInFlight = false
+    private var workSpan: String? = null
+    private val reportedWorkSpans = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var closed = false
     private val nextCapture = Runnable { capturePhoto() }
     private val activeClock = ActiveRecordingClock(monotonicMillis)
@@ -101,6 +104,8 @@ class CaptureViewModel @JvmOverloads constructor(
                 }
                 if (current.capturing && active != null && monotonicMillis() - lastCheckpoint >= 5_000) {
                     lastCheckpoint = monotonicMillis()
+                    val span = workSpan
+                    if (span != null) runCatching { workContext?.let { it.captureCheckpoint(span, it.now()) } }
                     worker.execute {
                         try { store.checkpoint(session, active, true); repository.checkpointSession(session, true); refreshManualReview(session) }
                         catch (error: Exception) { post { fail(error, true) } }
@@ -263,6 +268,7 @@ class CaptureViewModel @JvmOverloads constructor(
                 catch (error: Exception) { post { fail(error, true) } }
             }
         }
+        workSpan = runCatching { workContext?.let { it.captureStarted(checkNotNull(current.session).directory.name, it.now()) } }.getOrNull()
         update(current.copy(capturing = true, message = "Capturing. Keep the app open and phone steady."))
         capturePhoto()
     }
@@ -272,6 +278,9 @@ class CaptureViewModel @JvmOverloads constructor(
         captureRequest++
         main.removeCallbacks(nextCapture)
         if (current.capturing) {
+            val span = workSpan
+            workSpan = null
+            if (span != null) runCatching { workContext?.let { it.captureStopped(span, it.now()) } }
             var pauseMessage = message
             val active = try { activeClock.stop() } catch (_: ArithmeticException) {
                 val known = current.activeMillis ?: 0
@@ -394,6 +403,8 @@ class CaptureViewModel @JvmOverloads constructor(
             lastSwitchMillis = switchingSince?.let { (now - it).coerceAtLeast(0) } ?: current.lastSwitchMillis))
         switchingSince = null
         lastShutter = now
+        val span = workSpan
+        val workShutter = runCatching { workContext?.now() }.getOrNull()
         photoInFlight = true
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
         try {
@@ -407,6 +418,9 @@ class CaptureViewModel @JvmOverloads constructor(
                                 if (intent != null) store.completeFrame(session, intent, bitmap, activeClock.value())
                                 else { store.saveFrame(session, bitmap, capturedAt); store.snapshot(session) }
                             } finally { bitmap.recycle() }
+                            if (span != null && workShutter != null && reportedWorkSpans.add(span)) {
+                                workContext?.photoCommitted(span, workShutter)
+                            }
                             repository.refresh(session)
                             refreshManualReview(session, snapshot)
                             val saveLatency = (monotonicMillis() - lastShutter).coerceAtLeast(0)
