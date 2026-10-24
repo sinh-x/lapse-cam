@@ -77,6 +77,9 @@ def workflow_contract(text):
     need(re.search(r"(?m)^on:\n  pull_request:\n  push:\n    branches: \[develop\]\n  workflow_dispatch:$", code), "Wrong triggers")
     for token in ("runs-on: ubuntu-24.04", "persist-credentials: false", "distribution: temurin", "java-version: '17.0.16+8'",
                   "sdkmanager 'platforms;android-36' 'build-tools;35.0.0'", "ref: ${{ env.FEATURE_SHA }}",
+                  'sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"',
+                  'export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"',
+                  '"$GITHUB_ENV"', '"$GITHUB_PATH"', 'app/build/ci/sdk-setup.log',
                   ":app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug",
                   "set -euo pipefail", "if: always()", "app/build/test-results/", "app/build/outputs/apk/", "app/build/reports/"):
         need(token in code, f"Missing workflow contract: {token}")
@@ -216,8 +219,26 @@ class SelfTest(unittest.TestCase):
         for changed in (workflow.replace("pull_request:", "pull_request_target:"), workflow.replace("contents: read", "contents: write"),
                         workflow.replace(PINS["actions/checkout"], "v4"), workflow.replace(":app:lintDebug", ""),
                         workflow.replace("runs-on: ubuntu-24.04", "runs-on: ubuntu-latest"),
+                        workflow.replace('export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"', "# missing SDK PATH"),
                         workflow.replace("      - name: Host checks", "      - if: false\n        name: Host checks")):
             with self.assertRaises(Invalid): workflow_contract(changed)
+    def test_hosted_sdk_discovery_without_sdkmanager_on_path(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/android.yml").read_text()
+        start = workflow.index('          export ANDROID_HOME=')
+        end = workflow.index("          printf 'SDK manager:", start)
+        snippet = "\n".join(line[10:] for line in workflow[start:end].splitlines())
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            executable = root / "sdk/cmdline-tools/12.0/bin/sdkmanager"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("#!/bin/sh\nprintf 'sdk-fixture-12.0\\n'\n")
+            executable.chmod(0o700)
+            env = {**os.environ, "ANDROID_HOME": str(root / "sdk"), "GITHUB_ENV": str(root / "env"), "GITHUB_PATH": str(root / "path")}
+            result = subprocess.check_output(["bash", "-euc", snippet + '\nprintf "%s\\n" "$sdkmanager_bin"; sdkmanager --version'], env=env, cwd=root, text=True)
+            self.assertEqual(result.splitlines(), [str(executable), "sdk-fixture-12.0"])
+            self.assertIn(str(executable.parent), (root / "path").read_text())
+            self.assertIn(str(root / "sdk"), (root / "env").read_text())
+
     def test_exact_xml_and_negative_cases(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); marker = root / "marker"; marker.touch()

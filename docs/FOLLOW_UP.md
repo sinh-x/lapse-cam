@@ -1,3 +1,18 @@
+## TTL-011 publication and initial hosted-CI failure
+
+The feature was committed/pushed as06cce998255789a7748e71834d78610296161467 and
+operator-authorized draft PR[#1](https://github.com/sinh-x/lapse-cam/pull/1) targets
+develop. Initial exact-head hosted run40092858507 failed before tests because SDK
+manager was not on PATH. A bounded workflow/accounting correction explicitly
+resolves the installed SDK tools and preserves diagnostics, without version or
+scope changes. Synthetic SDK-path regression and accounting7/7+19/19 pass locally;
+a fresh hosted run remains required at this write. [Current CI evidence/limits](TTL011_CI.md).
+No merge/release or independent acceptance is implied.
+
+A later separately requested OPPO CPH2699/API36 update installed the same management
+APK and verified its on-device hash. No OPPO tests were run and it is not a
+substitute for the mandatory Pixel review target.
+
 ## TTL-011 Archive/Delete and scoped Android execution
 
 Sinh explicitly added Archive/Restore and confirmed Delete to the original read-only
