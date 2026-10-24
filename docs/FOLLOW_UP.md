@@ -1,3 +1,132 @@
+## TTL-011 Archive/Delete and scoped Android execution
+
+Sinh explicitly added Archive/Restore and confirmed Delete to the original read-only
+scope. [Behavior, v1→v2 migration, replay guards and evidence](TTL011_ARCHIVE_DELETE.md).
+Installed update: planned/ended metadata management only; running must End first;
+archive retains links; explicit deletion removes the selected work/links, never
+photos/videos. The physical synthetic check passed Archive→Restore→Cancel delete→
+Confirm delete while retaining all five earlier visible IDs.
+
+Current local host67/67; both APKs build; lint0 errors/55 warnings;80 Android methods
+compile. **All12 selected isolated WorkSessionStore/TimeboxExecution/TimeboxRecordingLink
+methods passed once on Pixel8Pro/API37/build2026100601/user0**, including the injected
+production CaptureViewModel A/gap/B recording-link path. This is not all80 execution
+or independent V1–V7; Activity empty-context guards remain intact against existing
+user data. App/test updates used -r (test -t), no clear/uninstall, permission changes,
+physical camera, Gallery export, source deletion, reboot or explicit force-stop.
+
+Current installed app SHA:
+`d413acd7ae2e4c25336071dc141749b0d1c8c686e830ba6708fb2b372b3a1730`;
+installed test SHA:
+`c81cc23d5196782dd77896f1256e7eb28c855ac36613c2b31b4f5f3ce95c3f19`.
+Evidence is in ignored restricted `app/build/ttl011-phase-evidence/d-eeedd5-management/`.
+Full UAT/review and matching hosted results remain separately required. Sinh has
+now authorized commit/push/CI and selected a draft PR to develop; exact subsequent
+commit/PR/run receipts belong in the ticket/PR. No merge/release is included.
+Earlier no-install/uncommitted statements below describe their earlier checkpoints.
+
+## TTL-011 Pixel UI and audible reminder follow-up
+
+After explicit operator permission, the installed follow-up fixes Work's missing
+keyboard/oversized Back, setup restoration/labels/draft navigation and unclear
+reminder-permission feedback. **63 host cases pass**, both APKs build, lint
+**0 errors / 56 warnings**; **75 Android methods compile, not instrumentation
+execution**. Targeted physical Pixel checks exercised keyboard visibility, blank/
+zero rejection, Back/resume, Save-only versus Start, manual End, copy/discard,
+one-minute expiry and generic notification display. After Sinh personally disabled
+DND, a fresh retry posted its notification and Sinh explicitly confirmed **Yes —
+I heard it**. Volume/channel settings were not changed by the agent. Synthetic
+records remain; existing media was not captured/exported/deleted.
+
+Current installed app SHA-256:
+`fb7c1e72299fdd80765097e6346d52d942a248a9372afe107eac59b258790a35`.
+See [complete source changes, observed versus unexecuted checks, original trial
+failures and remaining gaps](TTL011_UI_CHECKS.md). Full independent review/matrix,
+matching hosted CI and complete TS-1–14 remain outstanding. Earlier no-install/
+no-device statements below are historical implementation-phase facts.
+
+## TTL-011 local implementation, not acceptance
+
+Deployment `d-eeedd5`, branch `feature/TTL-011-timebox-video-links`, selected
+base `62a021c0d72f2029340b040ac125a8b393836974` including merged TTL-006. Sinh
+confirmed this selected base for r003 implementation; ticket comment
+`c-20261023230134268` retains that clarification without rewriting historical
+sign-offs/preparation. Source is an **uncommitted implementation candidate**.
+See [architecture, UI, semantics, limits and remaining gates](TTL011_IMPLEMENTATION.md).
+
+### Local phase checks
+
+Using the existing full JDK17.0.20+2 and SDK36/build-tools35.0.0, with no local
+provisioning, the final aggregate command exited **0**, with all 76 actionable
+Gradle tasks executed:
+
+```sh
+./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false \
+  :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest \
+  :app:lintDebug --rerun-tasks
+```
+
+- Host XML: **61 passed**, failures/errors/skips/ignored0 (50 originals +11 new).
+- Both debug APKs built. Android source inventory **72 methods** (58 including
+  TTL-006 +14 new). **No Android method executed in this deployment.**
+- Lint: **0 errors / 52 warnings**, no warning suppression or assertion weakening.
+- TTL-011 accounting self-tests: **6/6**, including synthetic begin/final lifecycle,
+  exact authority, raw CRLF-vs-blob drift, failed/duplicate/stale XML, output reuse,
+  alias/hard-link handling and workflow negative cases. TTL-005 generic helper
+  self-tests remain **19/19**. Synthetic accounting artifacts are not real APK/test
+  results. Real independent begin/final was not run in this checkout.
+- `git diff --check` passes. All existing host/Android test files, media storage,
+  codec, cleanup/ownership algorithms and CaptureDefaults remain unchanged.
+- Read-only upstream `git ls-remote` verified all three action pins. The workflow
+  itself has not run; no push/dispatch, credentials/settings change or release.
+
+Latest debug APK SHA-256:
+`1f76de781da827b82623c1eaf8d8a8524dae9055d6869a4a12188e0e91402984`.
+Latest test APK SHA-256:
+`eb7e5281d3b58dd072523f321d871fa0a8d5053db2a7f86dcd63966a88283e83`.
+These identify this local uncommitted phase build, not a frozen independently
+accepted Feature SHA. Neither APK was installed.
+
+Local logs, original compile failure, final host XML/lint and app-source hashes
+are retained under `app/build/ttl011-phase-evidence/d-eeedd5/` (ignored build
+output), alongside normal Gradle reports/APKs. Native command receipts retain
+original Python self-test failures: missing sys import, missed conditional-workflow
+negative case, and an isolated CRLF fixture index-stat setup problem. Corrections
+preserved the strict negative assertions and attribute-aware raw input accounting.
+The intermediate Android compile failure omitted required lens/appearance arguments
+in a new fixture, then was corrected. A generated Python cache was moved through
+approved trash `T-493` after direct deletion was refused; accounting now disables
+bytecode writes. No phone or valuable data cleanup was attempted.
+
+### Proposed Minor warning dispositions (review still required)
+
+| Group / occurrences | Rationale / remaining action |
+| --- | --- |
+| SetTextI18n (36) | English prototype labels, IDs, durations and contextual messages; resource/localization extraction is deferred. Do not remove IDs/error detail to reduce warnings. |
+| UseKtx (12) | Native view/preferences/graphics idioms; stylistic conversion is unnecessary to this feature and could churn baseline behavior. |
+| LockedOrientationActivity (1), DiscouragedApi (1) | Existing portrait prototype contract retained; physical large-screen/orientation behavior is not certified here. |
+| DataExtractionRules (1) | Existing allowBackup=false retained; explicit OEM transfer/backup policy still needs the separate security/platform review noted by TTL-006. |
+| ViewConstructor (1) | WorkSessionsView is programmatic and requires an Activity/coordinator; it is never XML-inflated. No fake XML constructor was added. |
+
+Four Kotlin deprecation sites remain: two native Dialog adjust-resize flags and
+two targeted accessibility announcements. They deliberately avoid countdown live
+regions, but real IME/inset/TalkBack behavior must be measured before acceptance.
+The existing Gradle9 compatibility notice is deferred toolchain maintenance;
+no upgrade or dependency was introduced. These are implementation proposals, not
+independent Critical/Major0 sign-off.
+
+### Acceptance remains blocked / not run
+
+Independent V1–V7 on a frozen clean candidate, all72 Android methods, matching
+non-skipped GitHub CI and TS-1–14 human UAT are outstanding. Layout/renderer/alarm
+fixtures are compiled, not observed phone behavior. Real 100%/200% nonlinear font
+scale, keyboard/insets, TalkBack, active capture navigation, pause/rollover links,
+permission denial/notification delivery and process/reboot recovery remain to be
+executed and repaired if needed. Obtain fresh exact-device/disposable-context and
+operation-specific permission; existing Pixel sources/defaults must be retained.
+No install, ADB query, force-stop/reboot, device permission change, merge, push or
+checkout return was performed. Earlier ticket results below remain historical.
+
 ## TTL-006 focused persistence validation implementation checks
 
 ### Owner-directed local develop integration (2026-10-23)
