@@ -34,7 +34,20 @@ verified against each installed base.apk. OPPO install was an update only, no te
 APK, UI/capture/permission operation, data clearing/uninstall, or matrix device
 substitution. The mandatory review target remains the approved Pixel.
 
-At this file's write, a fresh exact-head hosted rerun is still required. Its final
+The SDK-path correction's run
+https://github.com/sinh-x/lapse-cam/actions/runs/40093232884 passed all checks on
+`8a1446cec1af6defcc8210bcb540dcefb3ceae9f`. Its authenticated artifact ZIP digest
+matched, but a strict manifest audit found the listed
+`outputs/logs/manifest-merger-debug-report.txt` was not uploaded (only outputs/apk
+had been included). That original green run is retained as checks-passing but
+artifact-incomplete, not relabelled complete. The subsequent retention correction
+uploads the full checksummed outputs tree and adds an exact-path negative regression;
+application/test source remains unchanged. The first negative fixture exposed that
+a substring check accepted the narrower path; the validator now checks the exact
+upload line, with7/7 self-tests passing again. Its failed local assertion is retained
+in native command receipts.
+
+At this file's write, a fresh final exact-head hosted rerun is still required. Its final
 commit/run/attempt/event/head_sha, runner/JDK/SDK and artifact digests must be
 recorded in the PR/ticket evidence without editing an already-reviewed candidate
 merely to embed its own SHA. Full80 Android execution, independent admission/

@@ -81,4 +81,4 @@ jobs:
             app/build/ci/
             app/build/test-results/
             app/build/reports/
-            app/build/outputs/apk/
+            app/build/outputs/

@@ -81,8 +81,9 @@ def workflow_contract(text):
                   'export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"',
                   '"$GITHUB_ENV"', '"$GITHUB_PATH"', 'app/build/ci/sdk-setup.log',
                   ":app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug",
-                  "set -euo pipefail", "if: always()", "app/build/test-results/", "app/build/outputs/apk/", "app/build/reports/"):
+                  "set -euo pipefail", "if: always()", "app/build/test-results/", "app/build/outputs/", "app/build/reports/"):
         need(token in code, f"Missing workflow contract: {token}")
+    need(re.search(r"(?m)^            app/build/outputs/$", code), "Upload must retain the complete checksummed build-output tree")
     need("--offline" not in code, "Hosted checks may download approved dependencies")
     # Only evidence collection/upload may have a condition; core build cannot skip.
     blocks = re.split(r"(?m)^      - ", code)[1:]
@@ -220,6 +221,7 @@ class SelfTest(unittest.TestCase):
                         workflow.replace(PINS["actions/checkout"], "v4"), workflow.replace(":app:lintDebug", ""),
                         workflow.replace("runs-on: ubuntu-24.04", "runs-on: ubuntu-latest"),
                         workflow.replace('export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"', "# missing SDK PATH"),
+                        workflow.replace('            app/build/outputs/\n', '            app/build/outputs/apk/\n'),
                         workflow.replace("      - name: Host checks", "      - if: false\n        name: Host checks")):
             with self.assertRaises(Invalid): workflow_contract(changed)
     def test_hosted_sdk_discovery_without_sdkmanager_on_path(self):
