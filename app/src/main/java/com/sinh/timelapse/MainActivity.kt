@@ -122,7 +122,7 @@ class MainActivity : ComponentActivity() {
         pendingWorkId = intent.getStringExtra("workId")
         if (savedInstanceState?.getBoolean("workOpen") == true) {
             showWork(savedInstanceState.getString("workId"))
-            workView?.restore(savedInstanceState.getString("workPage") ?: "list", savedInstanceState.getString("workId"), savedInstanceState.getString("workSetupReturn"), savedInstanceState.getBoolean("workArchivedView"))
+            workView?.restore(savedInstanceState.getString("workPage") ?: "list", savedInstanceState.getString("workId"), savedInstanceState.getString("workSetupReturn"), savedInstanceState.getBoolean("workArchivedView"), savedInstanceState.getString("workTypeFilter"), savedInstanceState.getString("workSort"))
         }
         if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings()
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
@@ -476,6 +476,7 @@ class MainActivity : ComponentActivity() {
         outState.putInt("split", split.selectedItemPosition); outState.putInt("interval", interval.selectedItemPosition); outState.putInt("fps", fps.selectedItemPosition)
         outState.putBoolean("sheetOpen", sheet?.isShowing == true)
         outState.putBoolean("workOpen", workView != null); outState.putString("workPage", workView?.savedPage()); outState.putString("workId", workView?.selectedId()); outState.putString("workSetupReturn", workView?.setupReturnId()); outState.putBoolean("workArchivedView", workView?.isShowingArchived() == true)
+        outState.putString("workTypeFilter", workView?.activityTypeFilter()); outState.putString("workSort", workView?.listSort())
         super.onSaveInstanceState(outState)
     }
     override fun onStart() {

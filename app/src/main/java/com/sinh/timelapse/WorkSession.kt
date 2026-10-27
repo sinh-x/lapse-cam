@@ -81,6 +81,50 @@ data class WorkSnapshot(val draft: WorkDraft? = null, val records: List<WorkSess
     }
 }
 
+/** Unsaved metadata only: never shares the persisted create draft or rewrites timing. */
+data class WorkEditBuffer(val original: WorkSession, val draft: WorkDraft = original.editDraft(),
+    val revision: Long = 0) {
+    val changed: Boolean get() = draft != original.editDraft()
+}
+
+private fun WorkSession.editDraft() = WorkDraft(id, title, type, plannedMinutes.toString(), outcome ?: "")
+
+object WorkEditPolicy {
+    fun update(snapshot: WorkSnapshot, original: WorkSession, draft: WorkDraft): WorkSnapshot {
+        val latest = snapshot.records.singleOrNull { it.id == original.id }
+        require(original.id !in snapshot.deletedIds && latest == original) {
+            "This timebox changed or was deleted. Discard changes and reopen it before editing again"
+        }
+        require(original.state != WorkState.RUNNING) { "End the timebox before editing it" }
+        require(draft.id == original.id) { "Edit identity cannot change" }
+        val values = draft.validated(original.createdAt)
+        require(original.state != WorkState.ENDED || values.plannedMinutes == original.plannedMinutes) {
+            "Original ended duration cannot change"
+        }
+        return snapshot.replace(original.copy(title = values.title, type = values.type,
+            plannedMinutes = values.plannedMinutes, outcome = values.outcome))
+    }
+}
+
+enum class WorkSort(val label: String) {
+    NEWEST("Newest created"), OLDEST("Oldest created"), TYPE("Activity type")
+}
+
+/** Pure projection: neither partition/filter nor sorting changes storage order. */
+object WorkListPolicy {
+    fun project(records: List<WorkSession>, archived: Boolean = false, type: String? = null,
+        sort: WorkSort = WorkSort.NEWEST): List<WorkSession> {
+        require(type == null || WorkType.entries.any { it.key == type })
+        val newest = compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }
+        val comparator = when (sort) {
+            WorkSort.NEWEST -> newest
+            WorkSort.OLDEST -> compareBy<WorkSession> { it.createdAt }.thenBy { it.id }
+            WorkSort.TYPE -> compareBy<WorkSession> { WorkType.fromKey(it.type).ordinal }.then(newest)
+        }
+        return records.filter { it.archived == archived && (type == null || it.type == type) }.sortedWith(comparator)
+    }
+}
+
 /** Explicit user-managed metadata cleanup; never owns media or capture controls. */
 object WorkManagementPolicy {
     fun archive(snapshot: WorkSnapshot, id: String, archived: Boolean): WorkSnapshot {

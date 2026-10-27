@@ -26,11 +26,20 @@ internal class WorkSessionsView(
     private var page = if (initialId == null) "list" else "detail"
     private var formGeneration = 0L
     private var disposed = false
-    fun dispose() { disposed = true; formGeneration++ }
+    fun dispose() {
+        disposed = true; formGeneration++
+        discardPrompt?.dismiss(); discardPrompt = null; choicePrompt?.dismiss(); choicePrompt = null
+    }
     private var selected = initialId
     private var setupReturn: String? = null
     private var showArchived = false
     private var archiveFilter: Button? = null
+    private var activityFilter: String? = null
+    private var sort = WorkSort.NEWEST
+    private var typeFilterButton: Button? = null
+    private var sortButton: Button? = null
+    private var discardPrompt: AlertDialog? = null
+    private var choicePrompt: AlertDialog? = null
     private var emptyList: TextView? = null
     private var managing = false
     var onPageChanged: (() -> Unit)? = null
@@ -50,6 +59,7 @@ internal class WorkSessionsView(
     private var draft: WorkDraft? = null
     private var titleField: EditText? = null
     private var durationField: EditText? = null
+    private var durationShortcuts: LinearLayout? = null
     private var outcomeField: EditText? = null
     private var saveButton: Button? = null
     private var actionsKey = ""
@@ -67,6 +77,7 @@ internal class WorkSessionsView(
         buildPage()
     }
     fun back(): Boolean {
+        if (page == "edit") { cancelEdit(); return true }
         if (page == "list") {
             if (!showArchived) return false
             showArchived = false; buildPage(); return true
@@ -80,18 +91,56 @@ internal class WorkSessionsView(
     fun selectedId(): String? = selected
     fun setupReturnId(): String? = setupReturn
     fun isShowingArchived(): Boolean = showArchived
-    fun restore(page: String, id: String?, returnId: String? = null, archivedView: Boolean = false) {
-        this.page = page.takeIf { it in setOf("list", "setup", "detail") } ?: "list"
+    fun activityTypeFilter(): String? = activityFilter
+    fun listSort(): String = sort.name
+    fun restore(page: String, id: String?, returnId: String? = null, archivedView: Boolean = false,
+        typeFilter: String? = null, sortName: String? = null) {
+        this.page = page.takeIf { it in setOf("list", "setup", "edit", "detail") } ?: "list"
+        if (this.page == "edit" && owner.savedEditor == null) this.page = if (id == null) "list" else "detail"
+        activityFilter = typeFilter?.takeIf { key -> WorkType.entries.any { it.key == key } }
+        sort = WorkSort.entries.singleOrNull { it.name == sortName } ?: WorkSort.NEWEST
         selected = id; setupReturn = returnId; showArchived = archivedView; buildPage()
+    }
+    private fun cancelEdit() {
+        if (owner.editSaving || discardPrompt != null) return
+        fun discard() {
+            owner.cancelSavedEdit(); hideKeyboard(); draft = null; page = "detail"; buildPage()
+        }
+        if (owner.savedEditor?.changed != true) { discard(); return }
+        discardPrompt = AlertDialog.Builder(activity).setTitle("Discard unsaved changes?")
+            .setMessage("This timebox has not been changed. Your create draft is also retained.")
+            .setNegativeButton("Keep editing", null).setPositiveButton("Discard changes") { _, _ -> discard() }
+            .create().also { dialog -> dialog.setOnDismissListener { discardPrompt = null }; dialog.show() }
+    }
+    private fun chooseTypeFilter() {
+        if (disposed || choicePrompt != null) return
+        val values = listOf<String?>(null) + WorkType.entries.map { it.key }
+        choicePrompt = AlertDialog.Builder(activity).setTitle("Activity type")
+            .setSingleChoiceItems((listOf("All") + WorkType.entries.map { it.label }).toTypedArray(), values.indexOf(activityFilter)) { dialog, index ->
+                if (!disposed) { activityFilter = values[index]; owner.state.value?.let(::render) }
+                choicePrompt = null; dialog.dismiss()
+            }.setNegativeButton("Cancel", null).create().also { dialog ->
+                dialog.setOnDismissListener { if (choicePrompt === dialog) choicePrompt = null }; dialog.show()
+            }
+    }
+    private fun chooseSort() {
+        if (disposed || choicePrompt != null) return
+        choicePrompt = AlertDialog.Builder(activity).setTitle("Sort timeboxes")
+            .setSingleChoiceItems(WorkSort.entries.map { it.label }.toTypedArray(), sort.ordinal) { dialog, index ->
+                if (!disposed) { sort = WorkSort.entries[index]; owner.state.value?.let(::render) }
+                choicePrompt = null; dialog.dismiss()
+            }.setNegativeButton("Cancel", null).create().also { dialog ->
+                dialog.setOnDismissListener { if (choicePrompt === dialog) choicePrompt = null }; dialog.show()
+            }
     }
     private fun buildPage() {
         formGeneration++
         content.removeAllViews(); content.addView(message); rows.clear(); actionsKey = ""; linksKey = null; list = null
-        newButton = null; currentActions = null; archiveFilter = null; emptyList = null
+        newButton = null; currentActions = null; archiveFilter = null; emptyList = null; typeFilterButton = null; sortButton = null
         reminderToggle = null; reminderPanel = null; reminderStatus = null; notificationButton = null; timingButton = null
-        titleField = null; outcomeField = null; durationField = null; saveButton = null
+        titleField = null; outcomeField = null; durationField = null; durationShortcuts = null; saveButton = null
         when (page) {
-            "setup" -> if (owner.state.value?.loaded == true) setup() else content.addView(text("Loading saved draft…"))
+            "setup", "edit" -> if (owner.state.value?.loaded == true) setup() else content.addView(text("Loading saved draft…"))
             "detail" -> {
                 detail = text(""); content.addView(detail)
                 actions = LinearLayout(activity).apply { orientation = VERTICAL }; content.addView(actions)
@@ -123,6 +172,8 @@ internal class WorkSessionsView(
                 content.addView(reminderPanel)
                 archiveFilter = button("Show archived timeboxes") { showArchived = !showArchived; buildPage() }
                 content.addView(archiveFilter)
+                typeFilterButton = button("") { chooseTypeFilter() }; content.addView(typeFilterButton)
+                sortButton = button("") { chooseSort() }; content.addView(sortButton)
                 emptyList = text(""); content.addView(emptyList)
                 list = LinearLayout(activity).apply { orientation = VERTICAL }; content.addView(list)
             }
@@ -142,7 +193,11 @@ internal class WorkSessionsView(
     }
     private fun setup() {
         val generation = formGeneration
-        val initial = owner.editorDraft ?: owner.state.value?.snapshot?.draft ?: owner.beginDraft()
+        val editing = page == "edit"
+        val initial = if (editing) checkNotNull(owner.savedEditor).draft
+            else owner.editorDraft ?: owner.state.value?.snapshot?.draft ?: owner.beginDraft()
+        val durationLocked = editing && owner.savedEditor?.original?.state == WorkState.ENDED
+        saving = if (editing) owner.editSaving else saving
         draft = initial
         titleField = edit("Activity title", initial.title).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -164,24 +219,29 @@ internal class WorkSessionsView(
             minLines = 3; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
         }
-        titleField!!.setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_NEXT) { focusInput(durationField!!); true } else false }
+        titleField!!.setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_NEXT) { focusInput(if (durationLocked) outcomeField!! else durationField!!); true } else false }
         durationField!!.setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_NEXT) { focusInput(outcomeField!!); true } else false }
-        content.addView(text("Save creates an intention only. Start is a separate action; no camera or countdown starts on Save."))
+        content.addView(text(if (editing) "Edit timebox. Save changes updates this record only; original timing and recording links are retained. No camera action."
+            else "Save creates an intention only. Start is a separate action; no camera or countdown starts on Save."))
         content.addView(text("Activity title (required)")); content.addView(titleField)
         content.addView(text("Activity type (optional; defaults to To-be-sorted)")); content.addView(type)
         content.addView(text("Original planned duration in minutes (required)")); content.addView(durationField)
         val shortcuts = LinearLayout(activity)
-        listOf(25, 45, 60, 90).forEach { minutes -> shortcuts.addView(button("$minutes") { durationField!!.setText("$minutes") }, LayoutParams(0, -2, 1f)) }
-        content.addView(shortcuts); content.addView(text("Expected outcome (optional)")); content.addView(outcomeField)
+        durationShortcuts = shortcuts
+        listOf(25, 45, 60, 90).forEach { minutes -> shortcuts.addView(button("$minutes") { if (!durationLocked) durationField!!.setText("$minutes") }, LayoutParams(0, -2, 1f)) }
+        content.addView(shortcuts)
+        if (durationLocked) content.addView(text("Ended timebox: original planned minutes cannot be changed."))
+        content.addView(text("Expected outcome (optional)")); content.addView(outcomeField)
         fun edited() {
-            if (disposed || saving || generation != formGeneration || page != "setup" || activity.isDestroyed) return
+            if (disposed || saving || generation != formGeneration || page !in setOf("setup", "edit") || activity.isDestroyed) return
             val value = initial.copy(title = titleField!!.text.toString(), minutes = durationField!!.text.toString(),
                 outcome = outcomeField!!.text.toString(), type = WorkType.entries.getOrNull(type.selectedItemPosition - 1)?.key)
             val errors = value.errors()
             if ("title" !in errors) titleField!!.error = null
             if ("minutes" !in errors) durationField!!.error = null
             if ("outcome" !in errors) outcomeField!!.error = null
-            draft = value; owner.edit(value)
+            draft = value
+            if (editing) owner.editSavedDraft(value) else owner.edit(value)
         }
         val watcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -193,7 +253,8 @@ internal class WorkSessionsView(
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = edited()
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
-        saveButton = button("Save intention") {
+        saveButton = button(if (editing) "Save changes" else "Save intention") {
+            if (saving || (editing && owner.editSaving)) return@button
             val value = checkNotNull(draft)
             val errors = value.errors()
             titleField!!.error = errors["title"]; durationField!!.error = errors["minutes"]; outcomeField!!.error = errors["outcome"]
@@ -201,28 +262,36 @@ internal class WorkSessionsView(
                 focusInput(when { "title" in errors -> titleField!!; "minutes" in errors -> durationField!!; else -> outcomeField!! })
                 return@button
             }
-            saving = true; setFormEnabled(false); message.text = "Saving intention…"
+            saving = true; setFormEnabled(false)
+            message.text = if (editing) "Saving changes…" else "Saving intention…"
+            if (editing) { owner.editSavedDraft(value); owner.saveEdited(); return@button }
             owner.save(value) { id ->
                 saving = false
                 if (!disposed && !activity.isDestroyed) { hideKeyboard(); selected = id; setupReturn = null; showArchived = false; page = "detail"; buildPage() }
             }
         }
         content.addView(saveButton)
-        content.addView(button("Discard draft") {
-            if (!saving) owner.discard(initial.id) { if (!disposed && !activity.isDestroyed) { hideKeyboard(); page = "list"; setupReturn = null; draft = null; buildPage() } }
+        content.addView(button(if (editing) "Cancel" else "Discard draft") {
+            if (editing) cancelEdit()
+            else if (!saving) owner.discard(initial.id) { if (!disposed && !activity.isDestroyed) { hideKeyboard(); page = "list"; setupReturn = null; draft = null; buildPage() } }
         })
     }
     fun render(state: WorkSessionCoordinator.State) {
         if (disposed) return
-        if (state.error != null) { saving = false; managing = false }
-        if (page == "setup" && titleField == null && state.loaded) { buildPage(); return }
-        val status = listOfNotNull(state.error ?: if (saving) "Saving intention…" else state.message,
-            state.reminder.takeIf { it.isNotEmpty() && page != "setup" }).joinToString("\n")
+        if (page == "edit") {
+            saving = owner.editSaving
+            if (owner.savedEditor == null) { hideKeyboard(); page = "detail"; draft = null; buildPage(); return }
+        } else if (state.error != null) saving = false
+        if (state.error != null) managing = false
+        val inForm = page == "setup" || page == "edit"
+        if (inForm && titleField == null && state.loaded) { buildPage(); return }
+        val status = listOfNotNull(state.error ?: if (saving) { if (page == "edit") "Saving changes…" else "Saving intention…" } else state.message,
+            state.reminder.takeIf { it.isNotEmpty() && !inForm }).joinToString("\n")
         if (message.text.toString() != status) message.text = status
         if (state.error != null && state.error != announcedError) message.announceForAccessibility(state.error)
         announcedError = state.error
         if (!state.loaded) { newButton?.isEnabled = false; return }
-        if (page == "setup") setFormEnabled(state.loaded && !saving)
+        if (inForm) setFormEnabled(state.loaded && !saving)
         val now = runCatching(owner::now).getOrNull() ?: return
         when (page) {
             "list" -> {
@@ -232,20 +301,32 @@ internal class WorkSessionsView(
                 reminderToggle?.visibility = if (showArchived) GONE else VISIBLE
                 reminderPanel?.visibility = if (!showArchived && reminderExpanded) VISIBLE else GONE
                 archiveFilter?.text = if (showArchived) "Back to active timeboxes" else "Show archived timeboxes (${state.snapshot.records.count { it.archived }})"
-                val displayed = state.snapshot.records.filter { it.archived == showArchived }
+                typeFilterButton?.text = "Activity type: ${activityFilter?.let { WorkType.fromKey(it).label } ?: "All"}"
+                sortButton?.text = "Sort: ${sort.label}"
+                val partition = state.snapshot.records.filter { it.archived == showArchived }
+                val displayed = WorkListPolicy.project(state.snapshot.records, showArchived, activityFilter, sort)
                 val ids = displayed.map { it.id }.toSet()
                 rows.keys.filter { it !in ids }.toList().forEach { id -> list!!.removeView(rows.remove(id)) }
-                emptyList?.apply { text = if (showArchived) "No archived timeboxes." else "No saved timeboxes yet."; visibility = if (displayed.isEmpty()) VISIBLE else GONE }
+                emptyList?.apply {
+                    text = if (partition.isNotEmpty()) "No timeboxes match this Activity type."
+                        else if (showArchived) "No archived timeboxes." else "No saved timeboxes yet."
+                    visibility = if (displayed.isEmpty()) VISIBLE else GONE
+                }
                 val access = state.reminderAccess
                 reminderToggle?.text = "End reminder settings — ${if (access == null) "check access" else if (access.notificationsAllowed && access.backgroundTiming) "ready" else "needs setup"}"
                 reminderStatus?.text = if (access == null) state.reminder else "Notifications: ${access.notificationStatus}\nBackground timing: ${if (access.backgroundTiming) "Allowed" else "Not allowed"}"
                 notificationButton?.apply { text = access?.notificationAction ?: "Allow end notification"; isEnabled = access?.notificationsAllowed != true }
                 timingButton?.apply { text = access?.timingAction ?: "Allow background timing"; isEnabled = access?.backgroundTiming != true }
                 newButton?.apply { text = if (owner.editorDraft != null || state.snapshot.draft != null) "Resume draft" else "New timebox"; isEnabled = state.loaded }
-                displayed.forEach { work ->
-                    val row = rows.getOrPut(work.id) { button("") { selected = work.id; page = "detail"; buildPage() }.also { list!!.addView(it) } }
-                    val label = "${work.title}\n${work.state.name.lowercase()} · ${dateTime(work.createdAt)}\n${work.id}"
+                displayed.forEachIndexed { index, work ->
+                    val row = rows.getOrPut(work.id) { button("") { selected = work.id; page = "detail"; buildPage() } }
+                    val label = "${work.title}\n${WorkType.fromKey(work.type).label} · ${work.state.name.lowercase()} · ${dateTime(work.createdAt)}\n${work.id}"
                     if (row.text.toString() != label) row.text = label
+                    if (list!!.indexOfChild(row) != index) {
+                        val focused = row.hasFocus()
+                        list!!.removeView(row); list!!.addView(row, index)
+                        if (focused) row.requestFocus()
+                    }
                 }
             }
             "detail" -> {
@@ -278,6 +359,12 @@ internal class WorkSessionsView(
                     }
                     if (work.state == WorkState.RUNNING) actions!!.addView(text("End this timebox before archiving or deleting it."))
                     else {
+                        actions!!.addView(button("Edit timebox") {
+                            val latest = owner.state.value?.snapshot?.records?.singleOrNull { it.id == selected }
+                            if (latest != null && latest.state != WorkState.RUNNING) {
+                                owner.beginSavedEdit(latest); page = "edit"; buildPage()
+                            }
+                        })
                         if (!work.archived) actions!!.addView(button("Archive timebox") { manageArchive(work, true) })
                         actions!!.addView(button("Delete timebox…") { confirmDelete(work) })
                     }
@@ -337,6 +424,10 @@ internal class WorkSessionsView(
             if (view is android.view.ViewGroup) for (i in 0 until view.childCount) visit(view.getChildAt(i))
         }
         visit(content)
+        if (page == "edit" && owner.savedEditor?.original?.state == WorkState.ENDED) {
+            durationField?.isEnabled = false
+            durationShortcuts?.let { shortcuts -> for (i in 0 until shortcuts.childCount) shortcuts.getChildAt(i).isEnabled = false }
+        }
     }
     private fun focusInput(field: EditText) {
         field.requestFocus()

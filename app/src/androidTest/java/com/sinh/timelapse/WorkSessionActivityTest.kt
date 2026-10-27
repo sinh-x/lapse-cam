@@ -15,6 +15,200 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class WorkSessionActivityTest {
+    private fun buttons(view: android.view.View) = WorkUiFixtures.descendants(view).filterIsInstance<Button>()
+    private fun field(view: android.view.View, prefix: String) = WorkUiFixtures.descendants(view).filterIsInstance<EditText>()
+        .single { it.contentDescription.toString().startsWith(prefix) }
+    private fun alertButton(label: String) = android.view.inspector.WindowInspector.getGlobalWindowViews()
+        .flatMap(WorkUiFixtures::descendants).filterIsInstance<Button>().single { it.text.toString().equals(label, true) }.performClick()
+    private fun choose(index: Int) {
+        val list = android.view.inspector.WindowInspector.getGlobalWindowViews().flatMap(WorkUiFixtures::descendants)
+            .filterIsInstance<android.widget.ListView>().single()
+        list.performItemClick(list.adapter.getView(index, null, list), index, list.adapter.getItemId(index))
+    }
+
+    @Test fun sharedEditorConfirmsDiscardRetainsCreateDraftAndRecreationThenSavesSameId() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(context.cacheDir, "edit-ui-${UUID.randomUUID()}").apply { check(mkdir()) }
+        val original = WorkDraft(title = "Original", type = "study", minutes = "25").validated(123)
+        val create = WorkDraft(title = "  Raw create  ", minutes = "invalid", outcome = "a\nb")
+        WorkSessionStore(root).commit(WorkSnapshot(draft = create, records = listOf(original)))
+        val owner = WorkSessionCoordinator(context.applicationContext as Application, root, false)
+        try {
+            WorkUiFixtures.emptyActivity().use { scenario ->
+                WorkUiFixtures.await(scenario) { owner.state.value?.loaded == true }
+                lateinit var view: WorkSessionsView
+                lateinit var dialog: WorkDialog
+                var returnPage = ""; var selected: String? = null
+                scenario.onActivity { activity ->
+                    owner.beginDraft()
+                    view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {}, original.id)
+                    owner.state.observe(activity) { view.render(it) }
+                    dialog = WorkDialog(activity, view) {}; dialog.show()
+                    buttons(view).single { it.text == "Edit timebox" }.performClick()
+                    assertEquals(3, WorkUiFixtures.descendants(view).filterIsInstance<EditText>().size)
+                    assertEquals(1, WorkUiFixtures.descendants(view).filterIsInstance<android.widget.Spinner>().size)
+                    assertEquals("Original", field(view, "Activity title").text.toString())
+                    field(view, "Activity title").setText("Changed")
+                    dialog.cancel() // Escape/legacy cancellation must not bypass the guard.
+                    assertTrue(dialog.isShowing)
+                }
+                WorkUiFixtures.idle()
+                scenario.onActivity {
+                    alertButton("Keep editing")
+                    assertEquals("Changed", field(view, "Activity title").text.toString())
+                    assertTrue(view.back())
+                }
+                WorkUiFixtures.idle()
+                scenario.onActivity {
+                    alertButton("Discard changes")
+                    assertEquals("detail", view.savedPage()); assertEquals(original.id, view.selectedId())
+                    assertEquals(original, owner.state.value!!.snapshot.records.single()); assertEquals(create, owner.editorDraft)
+                    buttons(view).single { it.text == "Edit timebox" }.performClick()
+                    field(view, "Activity title").setText("Recreated edit")
+                    field(view, "Original planned").setText("45")
+                    field(view, "Expected outcome").setText("Retained outcome")
+                    returnPage = view.savedPage(); selected = view.selectedId(); dialog.dismiss()
+                }
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {})
+                    view.restore(returnPage, selected)
+                    owner.state.observe(activity) { view.render(it) }
+                    dialog = WorkDialog(activity, view) {}; dialog.show()
+                    assertEquals("Recreated edit", field(view, "Activity title").text.toString())
+                    assertEquals("45", field(view, "Original planned").text.toString())
+                    assertEquals(create, owner.editorDraft)
+                    field(view, "Activity title").setText(" ")
+                    buttons(view).single { it.text == "Save changes" }.performClick()
+                    assertNotNull(field(view, "Activity title").error)
+                    assertEquals(original, owner.state.value!!.snapshot.records.single())
+                    field(view, "Activity title").setText("Recreated edit")
+                    buttons(view).single { it.text == "Save changes" }.performClick()
+                }
+                WorkUiFixtures.await(scenario) { view.savedPage() == "detail" && owner.state.value!!.snapshot.records.single().title == "Recreated edit" }
+                scenario.onActivity { activity ->
+                    assertEquals(original.copy(title = "Recreated edit", plannedMinutes = 45, outcome = "Retained outcome"), owner.state.value!!.snapshot.records.single())
+                    assertEquals(create, owner.editorDraft); assertEquals(create, owner.state.value!!.snapshot.draft)
+                    assertFalse(androidx.lifecycle.ViewModelProvider(activity)[CaptureViewModel::class.java].state.value!!.capturing)
+                    assertTrue(view.back())
+                    buttons(view).single { it.text == "Resume draft" }.performClick()
+                    assertEquals(create.title, field(view, "Activity title").text.toString())
+                    assertEquals(create.minutes, field(view, "Original planned").text.toString()); dialog.dismiss()
+                }
+            }
+            assertEquals(create, WorkSessionStore(root).load().draft)
+        } finally { owner.closeFixture(); check(root.deleteRecursively()) }
+    }
+
+    @Test fun archivedEndedEditorLocksMinutesAndShortcutsWhileRunningHasNoEdit() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(context.cacheDir, "ended-edit-ui-${UUID.randomUUID()}").apply { check(mkdir()) }
+        val work = WorkDraft(title = "Ended", minutes = "1").validated(123)
+        fun moment(value: Long) = WorkMoment("fixture", value, 1000 + value)
+        val ended = TimeboxPolicy.end(TimeboxPolicy.start(WorkSnapshot(records = listOf(work)), work.id, moment(0)), work.id, moment(10))
+            .records.single().copy(archived = true)
+        WorkSessionStore(root).commit(WorkSnapshot(records = listOf(ended)))
+        val owner = WorkSessionCoordinator(context.applicationContext as Application, root, false, clock = { moment(20) })
+        try {
+            WorkUiFixtures.emptyActivity().use { scenario ->
+                WorkUiFixtures.await(scenario) { owner.state.value?.loaded == true }
+                lateinit var view: WorkSessionsView
+                scenario.onActivity { activity ->
+                    view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {}, ended.id)
+                    owner.state.observe(activity) { view.render(it) }
+                    buttons(view).single { it.text == "Edit timebox" }.performClick()
+                    assertFalse(field(view, "Original planned").isEnabled)
+                    listOf("25", "45", "60", "90").forEach { shortcut -> assertFalse(buttons(view).single { it.text == shortcut }.isEnabled) }
+                    field(view, "Activity title").setText("Edited ended")
+                    view.render(owner.state.value!!)
+                    assertFalse(field(view, "Original planned").isEnabled)
+                    buttons(view).single { it.text == "Save changes" }.performClick()
+                }
+                WorkUiFixtures.await(scenario) { view.savedPage() == "detail" && owner.state.value!!.snapshot.records.single().title == "Edited ended" }
+                scenario.onActivity {
+                    assertEquals(ended.copy(title = "Edited ended"), owner.state.value!!.snapshot.records.single())
+                    buttons(view).single { it.text == "Edit timebox" }.performClick()
+                    field(view, "Activity title").setText("Stale edit")
+                    owner.archive(ended.id, false)
+                }
+                WorkUiFixtures.await(scenario) { !owner.state.value!!.snapshot.records.single().archived }
+                scenario.onActivity { buttons(view).single { it.text == "Save changes" }.performClick() }
+                WorkUiFixtures.await(scenario) { !owner.editSaving && owner.state.value!!.error != null }
+                scenario.onActivity {
+                    assertEquals("edit", view.savedPage()); assertEquals("Stale edit", field(view, "Activity title").text.toString())
+                    assertFalse(field(view, "Original planned").isEnabled)
+                    assertTrue(WorkUiFixtures.descendants(view).filterIsInstance<android.widget.TextView>().any { it.text.toString().contains("timebox changed") })
+                    assertEquals(ended.copy(title = "Edited ended", archived = false), owner.state.value!!.snapshot.records.single())
+                    buttons(view).single { it.text == "Cancel" }.performClick()
+                }
+                WorkUiFixtures.idle()
+                scenario.onActivity {
+                    alertButton("Discard changes")
+                    view.render(owner.state.value!!.copy(snapshot = WorkSnapshot(records = listOf(ended.copy(state = WorkState.RUNNING, archived = false, endElapsed = null, reason = null, confirmedElapsed = 0)))))
+                    assertTrue(buttons(view).none { it.text == "Edit timebox" }); view.dispose()
+                }
+            }
+        } finally { owner.closeFixture(); check(root.deleteRecursively()) }
+    }
+
+    @Test fun listControlsReorderVisibleRowsRetainStateAndKeepExcludedRunningAccessible() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(context.cacheDir, "list-ui-${UUID.randomUUID()}").apply { check(mkdir()) }
+        val records = WorkType.entries.flatMap { type -> (0..2).map { index ->
+            WorkDraft(title = "${type.label} $index", type = type.key).validated(if (index == 2) 100 else 200)
+        } }
+        val archived = records.map { it.copy(id = UUID.randomUUID().toString(), archived = true) }
+        val runningSnapshot = TimeboxPolicy.start(WorkSnapshot(records = records + archived), records.first().id, WorkMoment("fixture", 0, 1000))
+        WorkSessionStore(root).commit(runningSnapshot)
+        val owner = WorkSessionCoordinator(context.applicationContext as Application, root, false, clock = { WorkMoment("fixture", 10, 1010) })
+        fun ids(view: WorkSessionsView) = buttons(view).map { it.text.toString().substringAfterLast('\n') }.filter { id -> (records + archived).any { it.id == id } }
+        try {
+            WorkUiFixtures.emptyActivity().use { scenario ->
+                WorkUiFixtures.await(scenario) { owner.state.value?.loaded == true }
+                lateinit var view: WorkSessionsView
+                lateinit var dialog: WorkDialog
+                scenario.onActivity { activity ->
+                    view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {})
+                    owner.state.observe(activity) { view.render(it) }
+                    dialog = WorkDialog(activity, view) {}; dialog.show()
+                    assertEquals("Sort: Newest created", buttons(view).single { it.text.toString().startsWith("Sort:") }.text.toString())
+                    assertEquals(records.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    buttons(view).single { it.text.toString().startsWith("Sort:") }.performClick(); choose(1)
+                    assertEquals(records.sortedWith(compareBy<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    buttons(view).single { it.text.toString().startsWith("Sort:") }.performClick(); choose(2)
+                    assertEquals(records.sortedWith(compareBy<WorkSession> { WorkType.fromKey(it.type).ordinal }.thenByDescending { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    WorkType.entries.forEachIndexed { index, type ->
+                        buttons(view).single { it.text.toString().startsWith("Activity type:") }.performClick(); choose(index + 1)
+                        assertEquals(records.filter { it.type == type.key }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    }
+                    buttons(view).single { it.text.toString().startsWith("Activity type:") }.performClick(); choose(4)
+                    assertEquals(records.filter { it.type == "social" }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    assertTrue(buttons(view).single { it.text == "View running timebox" }.visibility == android.view.View.VISIBLE)
+                    buttons(view).single { it.text == "View running timebox" }.performClick(); assertEquals(records.first().id, view.selectedId())
+                    assertTrue(buttons(view).none { it.text == "Edit timebox" }); assertTrue(view.back())
+                    buttons(view).single { it.text.toString().startsWith("Show archived") }.performClick()
+                    assertEquals(archived.filter { it.type == "social" }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    assertTrue(buttons(view).single { it.text == "View running timebox" }.visibility != android.view.View.VISIBLE)
+                    view.render(owner.state.value!!.copy(snapshot = WorkSnapshot(records = archived.filter { it.type != "social" })))
+                    assertTrue(WorkUiFixtures.descendants(view).filterIsInstance<android.widget.TextView>().any { it.visibility == android.view.View.VISIBLE && it.text == "No timeboxes match this Activity type." })
+                    view.render(owner.state.value!!.copy(snapshot = WorkSnapshot()))
+                    assertTrue(WorkUiFixtures.descendants(view).filterIsInstance<android.widget.TextView>().any { it.visibility == android.view.View.VISIBLE && it.text == "No archived timeboxes." })
+                    view.render(owner.state.value!!)
+                    val savedSort = view.listSort(); val savedType = view.activityTypeFilter()
+                    dialog.dismiss()
+                    view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {})
+                    view.restore("list", null, archivedView = true, typeFilter = savedType, sortName = savedSort)
+                    assertEquals(savedSort, view.listSort()); assertEquals(savedType, view.activityTypeFilter())
+                    view.dispose()
+                    view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {})
+                    assertNull(view.activityTypeFilter()); assertEquals("NEWEST", view.listSort())
+                    assertEquals(runningSnapshot.records, owner.state.value!!.snapshot.records)
+                    view.dispose()
+                }
+            }
+        } finally { owner.closeFixture(); check(root.deleteRecursively()) }
+    }
+
     @Test fun archiveRestoreAndDeleteConfirmationPreserveIdentityAndCancelIsNoOp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val root = File(context.cacheDir, "manage-ui-${UUID.randomUUID()}").apply { check(mkdir()) }

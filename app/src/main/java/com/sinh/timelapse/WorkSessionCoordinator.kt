@@ -16,7 +16,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     private val clock: (() -> WorkMoment)? = null) {
     data class State(val snapshot: WorkSnapshot = WorkSnapshot(), val loaded: Boolean = false,
         val message: String = "Loading work…", val error: String? = null, val reminder: String = "",
-        val reminderAccess: TimeboxReminderAccess? = null)
+        val reminderAccess: TimeboxReminderAccess? = null, val editRevisions: Map<String, Long> = emptyMap())
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val store = WorkSessionStore(files)
@@ -26,6 +26,30 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     val state: LiveData<State> = mutableState
     // Main-thread live edits survive recreation independently of acknowledged disk writes.
     var editorDraft: WorkDraft? = null; private set
+    var savedEditor: WorkEditBuffer? = null; private set
+    var editSaving: Boolean = false; private set
+    fun beginSavedEdit(original: WorkSession) {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        check(!editSaving && original.state != WorkState.RUNNING)
+        savedEditor = WorkEditBuffer(original, revision = state.value?.editRevisions?.get(original.id) ?: 0)
+    }
+    fun editSavedDraft(draft: WorkDraft) {
+        check(!editSaving)
+        val buffer = checkNotNull(savedEditor)
+        check(buffer.original.id == draft.id)
+        savedEditor = buffer.copy(draft = draft) // No disk write, and never touches editorDraft.
+    }
+    fun cancelSavedEdit() { check(!editSaving); savedEditor = null }
+    fun saveEdited() {
+        if (editSaving) return
+        val buffer = checkNotNull(savedEditor)
+        editSaving = true
+        submit("Changes saved", after = {
+            editSaving = false; savedEditor = null
+            // A recreated view, not just the original callback, observes completion.
+            mutableState.value = state.value
+        }, failed = { editSaving = false }) { store.update(buffer) }
+    }
     private var scheduled: String? = null
     @Volatile private var boot: String? = null
     private var captureSpan: String? = null // only accessed on worker
@@ -132,7 +156,8 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
         next
     }
 
-    private fun submit(message: String, after: () -> Unit = {}, finished: () -> Unit = {}, clearError: Boolean = true, operation: () -> WorkSnapshot) {
+    private fun submit(message: String, after: () -> Unit = {}, finished: () -> Unit = {}, clearError: Boolean = true,
+        failed: () -> Unit = {}, operation: () -> WorkSnapshot) {
         worker.execute {
             try {
                 val before = store.load()
@@ -158,16 +183,24 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
                     reminder = "Background reminder unavailable: ${error.message}. Work is saved; reopen to reconcile expiry."
                     scheduled = null
                 }
+                val revisions = store.revisions()
                 main.post {
                     val liveDraft = editorDraft
                     val acknowledged = liveDraft == null || next.draft == liveDraft || next.records.any { it.id == liveDraft.id }
                     val error = if (clearError && acknowledged) null else state.value?.error
-                    mutableState.value = State(next, true, if (error != null) "Not saved" else if (message == "Saved" && !acknowledged) "Saving…" else message, error, reminder, reminderAccess)
+                    mutableState.value = State(next, true, if (error != null) "Not saved" else if (message == "Saved" && !acknowledged) "Saving…" else message, error, reminder, reminderAccess, revisions)
                     after(); finished()
                 }
             } catch (error: Exception) {
+                // A failed write may already be published. Reload before exposing a retry; never
+                // claim success or retry from the pre-publication snapshot. Keep the edit buffer.
+                val recovered = runCatching { store.load() }.getOrNull()
+                val revisions = store.revisions()
                 main.post {
-                    mutableState.value = (state.value ?: State()).copy(error = "Work error: ${error.message}. Retained data; camera remains independent.", message = "Not saved")
+                    failed()
+                    val current = state.value ?: State()
+                    mutableState.value = current.copy(snapshot = recovered ?: current.snapshot, editRevisions = revisions,
+                        error = "Work error: ${error.message}. Retained data; camera remains independent.", message = "Not saved")
                     finished()
                 }
             }

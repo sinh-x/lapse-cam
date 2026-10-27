@@ -60,6 +60,46 @@ class TimeboxExecutionTest {
         } finally { owner.closeFixture(); check(root.deleteRecursively()) }
     }
 
+    @Test fun savedEditorNeverAutosavesOrConsumesCreateDraftAndConflictRetainsInput() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(context.cacheDir, "edit-seam-${UUID.randomUUID()}").apply { check(mkdir()) }
+        val store = WorkSessionStore(root)
+        val saved = WorkDraft(title = "Saved")
+        val create = WorkDraft(title = "Create draft", minutes = "bad")
+        store.saveDraft(saved); store.save(saved.id, 123); store.saveDraft(create)
+        val original = store.load().records.single()
+        val owner = WorkSessionCoordinator(context.applicationContext as android.app.Application, root, false,
+            clock = { WorkMoment("fixture", 0, 1000) })
+        fun main(block: () -> Unit) = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+        fun await(predicate: () -> Boolean) {
+            val end = android.os.SystemClock.elapsedRealtime() + 10_000
+            var ready = false
+            while (!ready && android.os.SystemClock.elapsedRealtime() < end) { main { ready = predicate() }; if (!ready) Thread.sleep(20) }
+            assertTrue(ready)
+        }
+        try {
+            await { owner.state.value?.loaded == true }
+            main {
+                owner.beginDraft()
+                owner.beginSavedEdit(original)
+                owner.editSavedDraft(WorkEditBuffer(original).draft.copy(title = "Unsaved edit"))
+                assertEquals(create, owner.editorDraft)
+            }
+            owner.reconcile(); await { owner.state.value?.snapshot?.draft == create }
+            assertEquals(original, WorkSessionStore(root).load().records.single())
+            main { owner.cancelSavedEdit(); owner.beginSavedEdit(original); owner.editSavedDraft(WorkEditBuffer(original).draft.copy(title = "Updated")); owner.saveEdited() }
+            await { owner.savedEditor == null && owner.state.value?.snapshot?.records?.single()?.title == "Updated" }
+            main { assertEquals(create, owner.editorDraft); owner.beginSavedEdit(owner.state.value!!.snapshot.records.single()) }
+            owner.archive(saved.id, true)
+            await { owner.state.value?.snapshot?.records?.single()?.archived == true }
+            main { owner.editSavedDraft(owner.savedEditor!!.draft.copy(title = "Stale")); owner.saveEdited() }
+            await { !owner.editSaving && owner.state.value?.error != null }
+            main { assertEquals("Stale", owner.savedEditor!!.draft.title); assertEquals(create, owner.editorDraft) }
+            assertEquals("Updated", WorkSessionStore(root).load().records.single().title)
+            assertEquals(create, WorkSessionStore(root).load().draft)
+        } finally { owner.closeFixture(); check(root.deleteRecursively()) }
+    }
+
     @Test fun persistedDeadlineReplacementAndRebootLowerBound() {
         val root = File(ApplicationProvider.getApplicationContext<Context>().cacheDir, "execution-${UUID.randomUUID()}")
         check(root.mkdir())

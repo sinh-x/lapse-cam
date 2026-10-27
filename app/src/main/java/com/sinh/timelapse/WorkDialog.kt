@@ -54,12 +54,14 @@ internal class WorkDialog(activity: Activity, private val workView: WorkSessions
         setOnDismissListener { hideKeyboard(); workView.dispose(); closed() }
     }
     private fun updateHeading() {
-        heading.text = when (workView.savedPage()) { "setup" -> "New timebox"; "detail" -> "Timebox details"; else -> if (workView.isShowingArchived()) "Archived timeboxes" else "Work" }
+        heading.text = when (workView.savedPage()) { "setup" -> "New timebox"; "edit" -> "Edit timebox"; "detail" -> "Timebox details"; else -> if (workView.isShowingArchived()) "Archived timeboxes" else "Work" }
     }
     private fun navigateBack() {
         hideKeyboard()
         if (!workView.back()) dismiss()
     }
+    // Dialog's legacy Back/Escape/cancel path must use the same unsaved-edit guard.
+    override fun cancel() { navigateBack() }
     private fun hideKeyboard() {
         val decor = window?.decorView ?: return
         context.getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(decor.windowToken, 0)

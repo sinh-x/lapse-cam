@@ -17,6 +17,12 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
     private var knownBytes: ByteArray? = null
     private var blocked: Exception? = null
     var snapshot = WorkSnapshot(); private set
+    // Process-local only: editors do not survive process death. Detect even archive/restore
+    // round trips (ABA) without adding a storage field or changing the JSON schema.
+    private val recordRevisions = mutableMapOf<String, Long>()
+    fun revisions(): Map<String, Long> = recordRevisions.toMap()
+    fun editTarget(id: String): WorkEditBuffer = WorkEditBuffer(load().records.single { it.id == id },
+        revision = recordRevisions[id] ?: 0)
 
     private fun safePaths() {
         check(!Files.isSymbolicLink(root.toPath()) && root.canonicalFile == root.absoluteFile) { "Aliased work root retained" }
@@ -67,6 +73,11 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
             fault("before-publish")
             atomic.finishWrite(stream); stream = null
             existed = true
+            val beforeRecords = snapshot.records.associateBy { it.id }
+            val nextRecords = next.records.associateBy { it.id }
+            (beforeRecords.keys + nextRecords.keys).forEach { id ->
+                if (beforeRecords[id] != nextRecords[id]) recordRevisions[id] = (recordRevisions[id] ?: 0) + 1
+            }
             check(target.readBytes().contentEquals(bytes)) { "Work readback mismatch" }
             snapshot = next
             knownBytes = bytes
@@ -96,6 +107,14 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
     fun discard(id: String): WorkSnapshot {
         val old = load()
         return if (old.draft?.id == id) commit(old.copy(draft = null)) else old
+    }
+
+    fun update(edit: WorkEditBuffer): WorkSnapshot {
+        val current = load()
+        require(edit.revision == (recordRevisions[edit.original.id] ?: 0)) {
+            "This timebox changed. Discard changes and reopen it before editing again"
+        }
+        return commit(WorkEditPolicy.update(current, edit.original, edit.draft))
     }
 
     fun archive(id: String, archived: Boolean): WorkSnapshot = commit(WorkManagementPolicy.archive(load(), id, archived))

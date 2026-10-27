@@ -81,6 +81,64 @@ class WorkSessionStoreTest {
         assertArrayEquals(corrupt, file.readBytes())
     }
 
+    @Test fun metadataEditsPersistInPlacePreserveCreateDraftAndRejectStaleMutations() = isolated { root ->
+        val store = WorkSessionStore(root)
+        val draft = WorkDraft(title = "Saved fixture")
+        store.saveDraft(draft); store.save(draft.id, 123)
+        val create = WorkDraft(title = "Unsaved create", minutes = "bad", outcome = "raw\ninput")
+        store.saveDraft(create)
+        val original = store.load().records.single()
+        val changed = WorkEditBuffer(original).draft.copy(title = "Edited", type = "study", minutes = "45")
+        val edit = store.editTarget(original.id).copy(draft = changed)
+        val updated = store.update(edit)
+        assertEquals(original.copy(title = "Edited", type = "study", plannedMinutes = 45), updated.records.single())
+        assertEquals(updated, WorkSessionStore(root).load()); assertEquals(create, updated.draft)
+        val file = File(root, "work-context/state.json")
+        val before = file.readBytes()
+        assertThrows(IllegalArgumentException::class.java) { store.update(edit.copy(draft = changed.copy(title = "Stale"))) }
+        assertArrayEquals(before, file.readBytes())
+        val current = updated.records.single()
+        val currentEdit = store.editTarget(current.id).copy(draft = changed)
+        store.archive(current.id, true)
+        assertThrows(IllegalArgumentException::class.java) { store.update(currentEdit) }
+        val archivedEdit = store.editTarget(current.id).copy(draft = changed)
+        store.archive(current.id, false)
+        assertThrows(IllegalArgumentException::class.java) { store.update(archivedEdit) }
+        // Same fields after a round trip are still stale, despite snapshot equality.
+        assertEquals(current, store.load().records.single())
+        assertThrows(IllegalArgumentException::class.java) { store.update(currentEdit) }
+        val plannedEdit = store.editTarget(current.id).copy(draft = changed)
+        store.commit(TimeboxPolicy.start(store.load(), current.id, WorkMoment("boot", 0, 1000)))
+        assertThrows(IllegalArgumentException::class.java) { store.update(plannedEdit) }
+        assertThrows(IllegalArgumentException::class.java) { store.update(store.editTarget(current.id)) }
+        store.commit(TimeboxPolicy.end(store.load(), current.id, WorkMoment("boot", 10, 1010)))
+        val endedEdit = store.editTarget(current.id)
+        store.delete(current.id)
+        val deleted = file.readBytes()
+        assertThrows(IllegalArgumentException::class.java) { store.update(endedEdit) }
+        assertArrayEquals(deleted, file.readBytes()); assertEquals(create, store.load().draft)
+    }
+    @Test fun editPublicationFaultsReloadBeforeRetryAndNeverOverwritePublishedChanges() = isolated { root ->
+        val store = WorkSessionStore(root)
+        val draft = WorkDraft(title = "Fault fixture")
+        store.saveDraft(draft); store.save(draft.id, 123)
+        val original = store.load().records.single()
+        val edited = WorkEditBuffer(original).draft.copy(title = "After")
+        val file = File(root, "work-context/state.json"); val before = file.readBytes()
+        val faultBefore = WorkSessionStore(root) { if (it == "before-publish") error("injected") }
+        val beforeEdit = faultBefore.editTarget(original.id).copy(draft = edited)
+        assertThrows(IllegalStateException::class.java) { faultBefore.update(beforeEdit) }
+        assertArrayEquals(before, file.readBytes()); assertEquals(original, faultBefore.load().records.single())
+        val faultAfter = WorkSessionStore(root) { if (it == "after-publish") error("injected") }
+        val afterEdit = faultAfter.editTarget(original.id).copy(draft = edited)
+        assertThrows(IllegalStateException::class.java) { faultAfter.update(afterEdit) }
+        assertEquals(original.copy(title = "After"), faultAfter.load().records.single())
+        val published = file.readBytes()
+        assertThrows(IllegalArgumentException::class.java) { faultAfter.update(afterEdit.copy(draft = edited.copy(title = "Retry"))) }
+        assertArrayEquals(published, file.readBytes())
+        assertEquals(original.copy(title = "After"), WorkSessionStore(root).load().records.single())
+    }
+
     @Test fun rawDraftRestartAtomicSaveReplayAndDiscard() = isolated { root ->
         val draft = WorkDraft(title = " \n", minutes = "1e4", outcome = "a\nb")
         WorkSessionStore(root).saveDraft(draft)
