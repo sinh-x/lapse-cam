@@ -11,3 +11,5 @@ captures/
 .DS_Store
 # Local raw runtime snapshots can contain private tool/environment context.
 .session-logs/
+# Private candidate validation evidence (device identities, raw reports and local binaries).
+.validation/

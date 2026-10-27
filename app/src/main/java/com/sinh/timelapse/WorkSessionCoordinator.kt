@@ -30,6 +30,29 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     @Volatile private var boot: String? = null
     private var captureSpan: String? = null // only accessed on worker
     private val completedSpans = mutableSetOf<String>()
+    private var syncObserver: ((WorkSnapshot, WorkMoment) -> Unit)? = null
+
+    /** Observation only enqueues memory on a different owner; no sync disk/network work here. */
+    internal fun observeForSync(observer: (WorkSnapshot, WorkMoment) -> Unit) {
+        worker.execute {
+            syncObserver = observer
+            runCatching { observer(store.load(), now()) }
+        }
+    }
+    internal fun applySharedMetadata(records: List<org.json.JSONObject>) = submit("Shared descriptions saved") {
+        var next = store.load()
+        for (record in records) {
+            val id = record.getString("id")
+            val local = next.records.singleOrNull { it.id == id } ?: continue
+            next = next.replace(SyncProjection.metadata(local, record.getJSONObject("fields")))
+        }
+        store.commit(next)
+    }
+    internal fun copyShared(draft: WorkDraft) = submit("Copied as new local planned timebox") {
+        val next = store.load()
+        // Do not overwrite an unrelated in-progress draft.
+        store.commit(next.copy(records = next.records + draft.validated(now().epoch).copy(title = draft.title, outcome = draft.outcome.ifEmpty { null })))
+    }
 
     init {
         submit("Saved") {
@@ -137,6 +160,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
             try {
                 val before = store.load()
                 val next = operation()
+                if (next != before) runCatching { syncObserver?.invoke(next, now()) }
                 val expired = next.records.filter { it.reason == WorkEnd.EXPIRY && before.records.any { old -> old.id == it.id && old.state == WorkState.RUNNING } }
                 val running = next.running
                 var reminder = ""

@@ -38,6 +38,15 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     private val model: CaptureViewModel by viewModels()
     private val work by lazy { WorkSessionCoordinator.get(application) }
+    private val sync by lazy { SyncCoordinator.get(application) }
+    private var sharedView: SharedHistoryView? = null
+    private var downloadVideo: org.json.JSONObject? = null
+    private var downloadMobileConsent = false
+    private val createSyncDownload = registerForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
+        val video = downloadVideo; downloadVideo = null
+        if (uri != null && video != null) sync.download(video, uri, downloadMobileConsent)
+        downloadMobileConsent = false
+    }
     private lateinit var preview: PreviewView
     private lateinit var clock: TimestampPreview
     private lateinit var mode: Spinner
@@ -111,14 +120,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi(savedInstanceState)
-        model.state.observe(this) { state -> renderCapture(state); bindCamera() }
+        model.state.observe(this) { state ->
+            renderCapture(state); bindCamera()
+            if (!state.loading && !state.recoveryBlocked) sync.backfillAssociations(model.sessions.value.orEmpty())
+        }
         model.sessions.observe(this) { sessions ->
             sessionsView?.render(sessions)
+            if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) sync.backfillAssociations(sessions)
             backlog.text = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size,
                 sessions.sumOf { it.bytes } / 1048576.0, sessions.count { it.canRetry })
             renderWork()
         }
         work.state.observe(this) { renderWork(); sessionsView?.render(model.sessions.value.orEmpty()) }
+        sync.state.observe(this) { sharedView?.render(it) }
+        downloadVideo = savedInstanceState?.getString("syncDownloadVideo")?.let { org.json.JSONObject(it) }
+        downloadMobileConsent = savedInstanceState?.getBoolean("syncDownloadMobile") ?: false
         pendingWorkId = intent.getStringExtra("workId")
         if (savedInstanceState?.getBoolean("workOpen") == true) {
             showWork(savedInstanceState.getString("workId"))
@@ -282,6 +298,7 @@ class MainActivity : ComponentActivity() {
         controls.addView(finish, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(controls)
         root.addView(Button(this).apply { text = "Recording details"; setOnClickListener { showRecordingDetails() } })
+        root.addView(Button(this).apply { text = "Private sync / shared history"; setOnClickListener { showSharedHistory() } })
         setContentView(root); root.requestApplyInsets()
     }
 
@@ -378,6 +395,17 @@ class MainActivity : ComponentActivity() {
         try { startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse("package:$packageName"))) }
         catch (_: ActivityNotFoundException) { Toast.makeText(this, "Background timing settings are unavailable on this device. Reopen the app to reconcile expiry.", Toast.LENGTH_LONG).show() }
     }
+    private fun showSharedHistory() {
+        val view = SharedHistoryView(this, sync) { video, mobile ->
+            downloadVideo = org.json.JSONObject(video.toString()); downloadMobileConsent = mobile
+            createSyncDownload.launch("Timelapse-${video.getString("id")}.mp4")
+        }
+        sharedView = view
+        sync.state.value?.let(view::render)
+        AlertDialog.Builder(this).setTitle("Private shared history").setView(view).setPositiveButton("Close", null)
+            .create().apply { setOnDismissListener { sharedView = null }; show() }
+    }
+
     private fun showWork(id: String? = null) {
         if (workDialog != null) return
         val view = WorkSessionsView(this, work, { model.sessions.value.orEmpty() }, ::openSessionVideo,
@@ -476,6 +504,8 @@ class MainActivity : ComponentActivity() {
         outState.putInt("split", split.selectedItemPosition); outState.putInt("interval", interval.selectedItemPosition); outState.putInt("fps", fps.selectedItemPosition)
         outState.putBoolean("sheetOpen", sheet?.isShowing == true)
         outState.putBoolean("workOpen", workView != null); outState.putString("workPage", workView?.savedPage()); outState.putString("workId", workView?.selectedId()); outState.putString("workSetupReturn", workView?.setupReturnId()); outState.putBoolean("workArchivedView", workView?.isShowingArchived() == true)
+        outState.putString("syncDownloadVideo", downloadVideo?.toString())
+        outState.putBoolean("syncDownloadMobile", downloadMobileConsent)
         super.onSaveInstanceState(outState)
     }
     override fun onStart() {
