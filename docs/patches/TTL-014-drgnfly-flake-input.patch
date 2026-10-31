@@ -1,0 +1,83 @@
+--- a/flake.nix
++++ b/flake.nix
+@@ -107,6 +107,13 @@
+       inputs.nixpkgs.follows = "nixpkgs";
+     };
+ 
++    timestamp-timelapse = {
++      # Local development input, like pa-platform. Keep its own locked Go toolchain.
++      # Explicit path: includes the reviewed uncommitted server fix and new flake files.
++      url = "path:/home/sinh/.treehouse/timestamp-timelapse-230d79/4/timestamp-timelapse";
++      # After publication, prefer a reviewed github:sinh-x/lapse-cam/<commit> pin.
++    };
++
+     opencode.url = "github:sinh-x/opencode/sinh-x-dev";
+ 
+     herdr = {
+--- a/systems/x86_64-linux/Drgnfly/timelapse/drgnfly-timelapse.nix
++++ b/systems/x86_64-linux/Drgnfly/timelapse/drgnfly-timelapse.nix
+@@ -1,21 +1,13 @@
+-# Operator-reviewed Drgnfly deployment of TTL-014 candidate 967380ba862d88e352b8947a3b9ee59e71083147.
++# Drgnfly lifecycle/persistence integration; the native package comes from the timestamp-timelapse input.
+ # This file contains paths/configuration only, NEVER password/token/private-key contents.
+ {
+   config,
++  inputs,
+   lib,
+   pkgs,
+   ...
+ }:
+ let
+-  # Keep the server on the reviewed/cache-verified Go1.26.8 package set even if
+-  # the host has a separate pending nixpkgs upgrade. No host lock update occurs.
+-  archivePkgs = import (builtins.fetchTree {
+-    type = "github";
+-    owner = "NixOS";
+-    repo = "nixpkgs";
+-    rev = "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8";
+-    narHash = "sha256-H83yz/do+hjOO0uujHyH8RgtIQP2v7Mw+cLwcZK/xKc=";
+-  }) { system = pkgs.stdenv.hostPlatform.system; };
+   account = "timestamp-timelapse";
+   credentials = "/var/lib/timelapse-credentials";
+   hostname = "drgnfly.tail10c2c6.ts.net";
+@@ -87,7 +79,7 @@
+   ];
+   services.timestamp-timelapse = {
+     enable = true;
+-    package = archivePkgs.callPackage ./nix/package.nix { };
++    package = inputs.timestamp-timelapse.packages.${pkgs.stdenv.hostPlatform.system}.timelapse-server;
+     tailnetAddress = "100.83.89.101";
+     inherit hostname;
+     port = 8443;
+--- a/systems/x86_64-linux/Drgnfly/timelapse/fixture.nix
++++ b/systems/x86_64-linux/Drgnfly/timelapse/fixture.nix
+@@ -1,10 +1,11 @@
+ # Pure configuration evaluation only. Does NOT activate a service or issue a certificate.
+-{ nixpkgs }:
++{ nixpkgs, timelapse }:
+ let
+   make =
+     extra:
+     nixpkgs.lib.nixosSystem {
+       system = "x86_64-linux";
++      specialArgs.inputs.timestamp-timelapse = timelapse;
+       modules = [
+         ./drgnfly-timelapse.nix
+         ({ lib, ... }: {
+@@ -42,6 +43,7 @@
+     (import ./drgnfly-timelapse.nix {
+       inherit (s) config pkgs;
+       inherit (nixpkgs) lib;
++      inputs.timestamp-timelapse = timelapse;
+     }).assertions;
+   wrongHost = make ({ lib, ... }: { networking.hostName = lib.mkForce "OtherHost"; });
+   noTailnet = make ({ lib, ... }: { services.tailscale.enable = lib.mkForce false; });
+@@ -53,7 +55,7 @@
+ assert c.services.timestamp-timelapse.port == 8443;
+ assert
+   c.services.timestamp-timelapse.package.outPath
+-  == "/nix/store/9c7mld4w5m2qjpw01ksm7ha91bq995p0-timelapse-server-0.1.0";
++  == timelapse.packages.x86_64-linux.timelapse-server.outPath;
+ assert c.networking.firewall.allowedTCPPorts == [ ];
+ assert
+   c.networking.firewall.trustedInterfaces == [

@@ -1,0 +1,35 @@
+{
+  "scope": "Draft only: no personal-nixos mutation, lock refresh or activation",
+  "hostRoot": "/home/sinh/git-repos/sinh-x/personal-nixos",
+  "hostBranch": "develop",
+  "hostHead": "5a58da7b9b1f61ea15b58328058dc5ea06c977c4",
+  "hostStatusBefore": [
+    " M flake.lock",
+    " M flake.nix",
+    " M systems/x86_64-linux/Drgnfly/timelapse/nix/module-tests.nix",
+    " M systems/x86_64-linux/Drgnfly/timelapse/nix/timelapse-server.nix"
+  ],
+  "hostFileSha256": {
+    "flake.lock": "bb22daa7f4a68ffb7ce000a6cbac2e22e1b99a9e1da79c60b47170f261efb845",
+    "flake.nix": "f346e829bb7b4f432a49b7aaaa4898a44836ff04fcc85b591f201e434706806b",
+    "systems/x86_64-linux/Drgnfly/timelapse/drgnfly-timelapse.nix": "a0b09dc2cf6f5c11d8582df40f258449825226a48be0b2c755b326f1a8d3b29c",
+    "systems/x86_64-linux/Drgnfly/timelapse/fixture.nix": "26b9af8f24cd79a677292c3f70cba6f66e1ac27055b8d15806eb3b753619df16",
+    "systems/x86_64-linux/Drgnfly/timelapse/manage.py": "5876ee1a10c8389187a9e89fad19736ebba1c3fae1d447c043a62aafe022e372",
+    "systems/x86_64-linux/Drgnfly/timelapse/nix/module-tests.nix": "aed51d1c8664f411836a8c393daabcc2fef32632cd306d45ec803cbf8d9bfa97",
+    "systems/x86_64-linux/Drgnfly/timelapse/nix/timelapse-server.nix": "bdb6b97cababfe8136cb7ce344d11d2dce0481960f9c2323a028cb72255f5164"
+  },
+  "modifiedHostFiles": [
+    "flake.nix",
+    "systems/x86_64-linux/Drgnfly/timelapse/drgnfly-timelapse.nix",
+    "systems/x86_64-linux/Drgnfly/timelapse/fixture.nix"
+  ],
+  "patchedFileSha256": {
+    "flake.nix": "0da3df085cecca9daae70c31c60fd2d1b3e479117033f6d0c1215faf65f89327",
+    "systems/x86_64-linux/Drgnfly/timelapse/drgnfly-timelapse.nix": "f2f7265d85f7ad6bb5a25b4a55dec41478b63f770aa17d030cba7e2dc54255e7",
+    "systems/x86_64-linux/Drgnfly/timelapse/fixture.nix": "af7b9f60fcce0b2f3862bb5b6db31b64770128e96ec9669136d2d068f3a31549"
+  },
+  "patchSha256": "cda95c92022bb090a3ff083828697d271c683cbb1a354daea3c56a14f57f45f8",
+  "timelapseRoot": "/home/sinh/.treehouse/timestamp-timelapse-230d79/4/timestamp-timelapse",
+  "timelapseHead": "967380ba862d88e352b8947a3b9ee59e71083147",
+  "expectedServerPackage": "/nix/store/llrknbgwp8j0x8cly332c84p1lj8jdi5-timelapse-server-0.1.0"
+}

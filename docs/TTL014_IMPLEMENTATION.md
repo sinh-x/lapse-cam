@@ -1,5 +1,11 @@
 # TTL-014 — implementation and remaining acceptance gates
 
+**Later closeout (2026-10-31):** Sinh explicitly accepted the current work as-is and
+requested local integration into `develop`, with deployment and validation gaps
+retained. See the [owner decision and current limits](sessions/d-0d4044-ttl014-closeout.md).
+The phase-specific implementation evidence below is historical, not a current claim
+that phone installation/service observation never happened or that deferred UAT passed.
+
 Selected worktree: `/home/sinh/.treehouse/timestamp-timelapse-230d79/4/timestamp-timelapse`.
 Branch: `feature/TTL-014-private-sync-server`; approved base
 `bbe3be26d2e9985c4ceca2e0caed57411d8a0fa5`.

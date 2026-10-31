@@ -85,24 +85,40 @@ internal class SyncCoordinator private constructor(private val app: Application)
             message = "Disabled; pending work retained"; publish()
         } }
     }
-    fun enroll(endpoint: String, token: String) {
-        worker.execute { safely {
-            val base = SyncTransport.validateEndpoint(endpoint)
-            require(token.matches(Regex("[0-9a-f]{64}")))
-            val s = store.load()
-            val existing = s.getString("endpoint")
-            check(existing.isEmpty() || existing == base) { "An archive cannot be silently replaced" }
-            // Explicit enrollment button authorizes this credential check, but no upload until it matches.
-            val network = network()
-            check(network != SyncPolicy.Network.OFFLINE && network != SyncPolicy.Network.OTHER)
-            val identity = SyncTransport(base, token).get("/v1/identity").getString("device")
-            check(identity == s.getString("device"))
-            val encrypted = SyncCredential.encrypt(token)
-            store.update { it.put("endpoint", base).put("credential", encrypted).put("enabled", true) }
-            allowed = true; SyncJobService.schedule(app, true)
-            message = "Enrolled. Existing saved work and proven published MP4s are eligible; background Wi-Fi only."
-            publish()
-        } }
+    fun enroll(endpoint: String, token: String, finished: (Boolean, String) -> Unit = { _, _ -> }) {
+        worker.execute {
+            var enrolled = false
+            try {
+                busy = true
+                message = "Checking enrollment with the private server… Please wait for the result."
+                publish()
+                val base = SyncEnrollment.endpoint(endpoint)
+                val privateToken = SyncEnrollment.token(token)
+                val s = store.load()
+                SyncEnrollment.checkArchive(s.getString("endpoint"), base)
+                // Explicit enrollment authorizes this credential check, not an unverified upload.
+                SyncEnrollment.checkNetwork(network())
+                SyncEnrollment.checkIdentity(s.getString("device")) {
+                    SyncTransport(base, privateToken).get("/v1/identity").getString("device")
+                }
+                val encrypted = SyncCredential.encrypt(privateToken)
+                store.update { it.put("endpoint", base).put("credential", encrypted).put("enabled", true) }
+                allowed = true; SyncJobService.schedule(app, true)
+                enrolled = true
+                message = "Enrollment succeeded. Sync is enabled; background uploads use Wi-Fi. Tap Sync now / refresh to check progress."
+            } catch (error: Exception) {
+                message = SyncEnrollment.error(error)
+            } finally {
+                busy = false
+                val result = message
+                try { publish() } catch (_: Exception) {
+                    // Even an unreadable store must not hide the enrollment result.
+                    main.post { mutable.value = (mutable.value ?: State()).copy(message = result, busy = false) }
+                }
+                val success = enrolled
+                main.post { finished(success, result) }
+            }
+        }
     }
     fun patch(record: JSONObject, field: String, value: String, resolve: Boolean) {
         val request = SyncProjection.patch(record, field, value, resolve)

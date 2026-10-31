@@ -80,7 +80,10 @@ func New(store *storage.Store, credentials func() (auth.Credentials, error), aut
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// Browser form POSTs need their same-origin Origin header for strict CSRF
+	// checks; no-referrer turns that header into "null". Cross-origin referrers
+	// remain suppressed, and foreign/null origins are still rejected below.
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 	if r.TLS == nil || r.Host != a.Authority || r.URL.RawQuery != "" && strings.Contains(strings.ToLower(r.URL.RawQuery), "token") {

@@ -243,9 +243,29 @@ func TestLoginLimitUsesRollingMinute(t *testing.T) {
 	requireStatus(t, wrong(), 401)
 	requireStatus(t, wrong(), 429)
 }
+func TestLoginPagePreservesSameOriginFormOrigin(t *testing.T) {
+	f := setup(t)
+	r := f.request(t, "GET", "/login", "", nil, nil)
+	requireStatus(t, r, 200)
+	// no-referrer makes browser form POSTs send Origin: null, which our strict
+	// login check must reject. same-origin preserves the origin for our form
+	// while still withholding referrers from cross-origin destinations.
+	if policy := r.Header.Get("Referrer-Policy"); policy != "same-origin" {
+		t.Fatalf("login form needs same-origin referrer policy, got %q", policy)
+	}
+	if !strings.Contains(r.Header.Get("Content-Security-Policy"), "form-action 'self'") {
+		t.Fatal("login form must remain restricted to its own origin")
+	}
+	if r.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("private login page must not be cached")
+	}
+	requireStatus(t, f.login(t), 303)
+	requireStatus(t, f.request(t, "GET", "/", "", nil, nil), 200)
+}
+
 func TestLoginNeedsExactOrigin(t *testing.T) {
 	f := setup(t)
-	for _, origin := range []string{"", "https://evil.example"} {
+	for _, origin := range []string{"", "null", "https://evil.example", "http://" + f.api.Authority, f.server.URL + "/", f.server.URL + "0"} {
 		requireStatus(t, f.request(t, "POST", "/login", "", []byte("username=owner&password=wrong"), map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": origin}), 403)
 	}
 }

@@ -107,7 +107,14 @@ internal class SharedHistoryView(private val activity: Activity, private val own
                 consent { confirmed ->
                     // The confirmation covers enrollment request only; uploads still need Sync now/Wi-Fi job.
                     if (owner.network() == SyncPolicy.Network.MOBILE && !confirmed) return@consent
-                    owner.enroll(selectedEndpoint, selectedToken); token.text.clear()
+                    owner.enroll(selectedEndpoint, selectedToken) { success, message ->
+                        if (!activity.isFinishing && !activity.isDestroyed) {
+                            AlertDialog.Builder(activity)
+                                .setTitle(if (success) "Enrollment succeeded" else "Enrollment failed")
+                                .setMessage(message).setPositiveButton("OK", null).show()
+                        }
+                    }
+                    token.text.clear()
                 }
             }.create()
         dialog.setOnDismissListener { token.text.clear() }; dialog.show()

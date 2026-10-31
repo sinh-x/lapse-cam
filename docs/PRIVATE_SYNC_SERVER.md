@@ -147,6 +147,9 @@ the server session. Restart invalidates all sessions and process-local login lim
 
 ## Native configuration / optional module
 
+For a copyable consuming-flake configuration, package/toolchain selection and
+installation boundaries, see [NixOS input installation](NIXOS_INSTALL.md).
+
 A native config is an explicit JSON object, no defaults inferred from host discovery:
 
 ```json
