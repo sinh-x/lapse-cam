@@ -61,6 +61,7 @@ internal class WorkSessionsView(
     private var durationField: EditText? = null
     private var durationShortcuts: LinearLayout? = null
     private var outcomeField: EditText? = null
+    private var descriptionField: EditText? = null
     private var saveButton: Button? = null
     private var actionsKey = ""
     private var announcedState = ""
@@ -138,7 +139,7 @@ internal class WorkSessionsView(
         content.removeAllViews(); content.addView(message); rows.clear(); actionsKey = ""; linksKey = null; list = null
         newButton = null; currentActions = null; archiveFilter = null; emptyList = null; typeFilterButton = null; sortButton = null
         reminderToggle = null; reminderPanel = null; reminderStatus = null; notificationButton = null; timingButton = null
-        titleField = null; outcomeField = null; durationField = null; durationShortcuts = null; saveButton = null
+        titleField = null; outcomeField = null; descriptionField = null; durationField = null; durationShortcuts = null; saveButton = null
         when (page) {
             "setup", "edit" -> if (owner.state.value?.loaded == true) setup() else content.addView(text("Loading saved draft…"))
             "detail" -> {
@@ -219,6 +220,9 @@ internal class WorkSessionsView(
             minLines = 3; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
         }
+        descriptionField = edit("Description (optional)", initial.description).apply {
+            minLines = 3; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
         titleField!!.setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_NEXT) { focusInput(if (durationLocked) outcomeField!! else durationField!!); true } else false }
         durationField!!.setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_NEXT) { focusInput(outcomeField!!); true } else false }
         content.addView(text(if (editing) "Edit timebox. Save changes updates this record only; original timing and recording links are retained. No camera action."
@@ -232,14 +236,17 @@ internal class WorkSessionsView(
         content.addView(shortcuts)
         if (durationLocked) content.addView(text("Ended timebox: original planned minutes cannot be changed."))
         content.addView(text("Expected outcome (optional)")); content.addView(outcomeField)
+        content.addView(text("Description (optional)")); content.addView(descriptionField)
         fun edited() {
             if (disposed || saving || generation != formGeneration || page !in setOf("setup", "edit") || activity.isDestroyed) return
             val value = initial.copy(title = titleField!!.text.toString(), minutes = durationField!!.text.toString(),
-                outcome = outcomeField!!.text.toString(), type = WorkType.entries.getOrNull(type.selectedItemPosition - 1)?.key)
+                outcome = outcomeField!!.text.toString(), description = descriptionField!!.text.toString(),
+                type = WorkType.entries.getOrNull(type.selectedItemPosition - 1)?.key)
             val errors = value.errors()
             if ("title" !in errors) titleField!!.error = null
             if ("minutes" !in errors) durationField!!.error = null
             if ("outcome" !in errors) outcomeField!!.error = null
+            if ("description" !in errors) descriptionField!!.error = null
             draft = value
             if (editing) owner.editSavedDraft(value) else owner.edit(value)
         }
@@ -248,7 +255,7 @@ internal class WorkSessionsView(
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = edited()
             override fun afterTextChanged(s: Editable?) = Unit
         }
-        listOf(titleField!!, durationField!!, outcomeField!!).forEach { it.addTextChangedListener(watcher) }
+        listOf(titleField!!, durationField!!, outcomeField!!, descriptionField!!).forEach { it.addTextChangedListener(watcher) }
         type.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = edited()
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -257,9 +264,9 @@ internal class WorkSessionsView(
             if (saving || (editing && owner.editSaving)) return@button
             val value = checkNotNull(draft)
             val errors = value.errors()
-            titleField!!.error = errors["title"]; durationField!!.error = errors["minutes"]; outcomeField!!.error = errors["outcome"]
+            titleField!!.error = errors["title"]; durationField!!.error = errors["minutes"]; outcomeField!!.error = errors["outcome"]; descriptionField!!.error = errors["description"]
             if (errors.isNotEmpty()) {
-                focusInput(when { "title" in errors -> titleField!!; "minutes" in errors -> durationField!!; else -> outcomeField!! })
+                focusInput(when { "title" in errors -> titleField!!; "minutes" in errors -> durationField!!; "description" in errors -> descriptionField!!; else -> outcomeField!! })
                 return@button
             }
             saving = true; setFormEnabled(false)
@@ -335,7 +342,7 @@ internal class WorkSessionsView(
                     actions?.removeAllViews(); linksPanel?.removeAllViews(); return
                 }
                 val start = work.start
-                detail.text = "${work.title}\n${work.id}\nCreated ${dateTime(work.createdAt)}\n${WorkType.fromKey(work.type).label}\nOriginal plan: ${work.plannedDurationLabel}\nExpected outcome: ${work.outcome ?: "Not specified"}\n${work.state.name.lowercase()}${if (work.archived) " · archived" else ""}" +
+                detail.text = "${work.title}\n${work.id}\nCreated ${dateTime(work.createdAt)}\n${WorkType.fromKey(work.type).label}\nOriginal plan: ${work.plannedDurationLabel}\nExpected outcome: ${work.outcome ?: "Not specified"}\nDescription: ${work.description.ifEmpty { "Not specified" }}\n${work.state.name.lowercase()}${if (work.archived) " · archived" else ""}" +
                     (if (work.state == WorkState.RUNNING) "\nRemaining ${remaining(work.remaining(now))}" else "") +
                     (start?.let { "\nStart ${Instant.ofEpochMilli(it.epoch)} · boot ${it.boot}" } ?: "") +
                     (work.endElapsed?.let { "\n${work.reason} · confirmed elapsed ${work.confirmedElapsed}ms\nDerived end (start wall anchor): ${Instant.ofEpochMilli(Math.addExact(start!!.epoch, it - start.elapsed))}" } ?: "") +

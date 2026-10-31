@@ -6,6 +6,8 @@ Product exploration: [output-first work sessions, discussion record, and session
 
 Platform exploration: [Linux / NixOS webcam timelapse ideas](docs/LINUX_WEBCAM_EXPLORATION.md) (exploration only; no ticket or implementation).
 
+**TTL-014 owner-accepted as-is for local `develop` integration (2026-10-31):** private native Go archive/browser, durable Android sync/shared history, enrollment feedback, browser-origin fix and reusable Nix package/module. Pre-merge local checks: 85/85 host tests, both APKs, lint 0 errors/72 warnings; server tests/vet and offline package/module checks pass. **This is acceptance with known gaps, not full UAT or production readiness.** Host package adoption/browser verification remain in **NX-067**; independent two-phone/server validation, CI and human UAT are deferred. [Decision, actual evidence and limits](docs/sessions/d-0d4044-ttl014-closeout.md) · [implementation history](docs/TTL014_IMPLEMENTATION.md) · [validation](docs/TTL014_VALIDATION.md) · [operator draft](docs/PRIVATE_SYNC_SERVER.md) · [protocol](server/PROTOCOL.md).
+
 **TTL-011 implementation candidate (not accepted):** preview-first Camera UI with grouped settings, model-driven LIVE, separate Work setup/Start/End timeboxes, durable drafts and capture-time recording links. Local offline checks: **67/67 host**, both debug APKs and lint pass; **80 Android methods compile, with 12 isolated store/execution/link methods passing on Pixel** (not full80 execution). Installed UI follow-up fixes Work keyboard/Back navigation and reminder-permission feedback. **Archive/Restore and confirmed Delete** now manage planned/ended timeboxes without deleting photos/videos; [behavior, migration and checks](docs/TTL011_ARCHIVE_DELETE.md). Targeted Pixel Work checks include real expiry and a user-confirmed audible end notification with DND off; see [actual outcomes and limits](docs/TTL011_UI_CHECKS.md). Full device UAT, independent matrix/review and matching GitHub CI remain outstanding; no push/merge. See [implementation/limits](docs/TTL011_IMPLEMENTATION.md) and [current phase evidence](docs/FOLLOW_UP.md#ttl-011-local-implementation-not-acceptance). Results below describe earlier tickets, not TTL-011 acceptance.
 
 **TTL-006 focused persistence validation (implementation checks only):** shared defaults adapter and five new Android defaults/Activity-recreation tests; core persistence/sampling/retention/export behavior is unchanged. Offline host **50/50**, both APK builds and lint (**0 errors / 26 warnings**) pass; accounting self-tests **25/25** pass. Android inventory is **58 methods**. The authorized Pixel defaults run executed **5: 3 passed, 2 failed safe admission guards** because existing defaults/sessions prevent Activity fixture isolation. Both current APKs are installed and their on-device hashes match; existing data was retained. Work is on `feature/TTL-006-persistence-validation`; full Pixel regression execution, clean-candidate L1, independent review and all ten human UAT sign-offs (including separately permitted actual termination/reboot) remain outstanding. No acceptance, clearing/uninstall or actual-loss operation is claimed. Hosted CI is N/A for this ticket. See [current evidence and warning dispositions](docs/FOLLOW_UP.md#ttl-006-focused-persistence-validation-implementation-checks) and [loss-evidence procedure](docs/PERSISTENCE_VALIDATION.md).
@@ -58,6 +60,14 @@ Local build artifacts (not committed):
 - Lint report: `app/build/reports/lint-results-debug.html`
 
 APK installation and app UAT remain separately authorized, explicitly selected-device operations. Do not clear/uninstall app data, fill phone storage, or delete source photos/published videos as a test workaround.
+
+## NixOS private sync server
+
+Use this repository as a flake input for `packages.<system>.timelapse-server` and
+`nixosModules.timelapse-server`. See [installation instructions](docs/NIXOS_INSTALL.md)
+and the [disabled-by-default consumer example](examples/nixos/timelapse.nix).
+This packaging does not activate a host. TTL-014's owner acceptance does not complete
+NX-067 deployment or the deferred validation checks.
 
 ## ADB development shell (TTL-002)
 

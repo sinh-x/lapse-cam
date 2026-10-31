@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Private timelapse archive</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+<header><h1>Private archive · read only</h1><button id="logout">Log out</button></header>
+<p>One host is not an independent backup. Running work shows the last source sync, not a live timer. Capture-time links are not exact video seek mappings.</p>
+<p id="status" role="status"></p>
+<form id="filters"><label>Source device UUID <input name="device"></label><label>Category <select name="type"><option value="">All</option><option>work</option><option>study</option><option>personal</option><option>social</option><option>to-be-sorted</option></select></label><label>Status <select name="status"><option value="">All</option><option>PLANNED</option><option>RUNNING</option><option>ENDED</option><option>ARCHIVED</option><option>DELETED</option></select></label><label>Created after <input type="date" name="since"></label><label>Created before <input type="date" name="until"></label><button>Filter / refresh</button></form>
+<main><h2>Saved work</h2><div id="records"></div><h2>Published MP4s (including unlinked exports)</h2><p>Video date filtering uses archive publication time. Category/status filters apply to work, not unlinked videos. Videos are fetched only on play/download.</p><div id="videos"></div></main><button id="next" disabled>Next page</button><a href="/login">Log in</a></html>

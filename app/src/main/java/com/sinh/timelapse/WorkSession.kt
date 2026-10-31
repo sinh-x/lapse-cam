@@ -11,17 +11,18 @@ enum class WorkType(val key: String, val label: String) {
 
 data class WorkDraft(
     val id: String = UUID.randomUUID().toString(), val title: String = "", val type: String? = null,
-    val minutes: String = "25", val outcome: String = "",
+    val minutes: String = "25", val outcome: String = "", val description: String = "",
 ) {
     fun validated(createdAt: Long): WorkSession {
         val errors = errors()
         require(errors.isEmpty()) { errors.values.joinToString("; ") }
         return WorkSession(id, createdAt, title.trim(), type ?: WorkType.UNSORTED.key, minutes.toInt(),
-            outcome.takeUnless { it.isBlank() })
+            outcome.takeUnless { it.isBlank() }, description = description)
     }
     fun errors(): Map<String, String> = buildMap {
-        if (title.trim().codePointCount(0, title.trim().length) !in 1..120) put("title", "Enter 1–120 characters")
-        if (outcome.codePointCount(0, outcome.length) > 2000) put("outcome", "Use at most 2,000 characters")
+        if (!SyncPolicy.validText(title.trim(), 1, 120)) put("title", "Enter 1–120 characters")
+        if (!SyncPolicy.validText(outcome, 0, 2000)) put("outcome", "Use at most 2,000 characters")
+        if (!SyncPolicy.validText(description, 0, 2000)) put("description", "Use at most 2,000 characters")
         if (!minutes.matches(Regex("[0-9]+")) || minutes.toIntOrNull() !in 1..1440)
             put("minutes", "Enter whole minutes from 1 to 1,440")
         if (type != null && WorkType.entries.none { it.key == type }) put("type", "Choose a supported activity type")
@@ -40,12 +41,13 @@ data class WorkSession(
     val outcome: String? = null, val state: WorkState = WorkState.PLANNED,
     val start: WorkMoment? = null, val deadline: Long? = null, val endElapsed: Long? = null,
     val reason: WorkEnd? = null, val confirmedElapsed: Long = 0, val archived: Boolean = false,
+    val description: String = "",
 ) {
     val uncertain: Boolean get() = reason == WorkEnd.REBOOT
     val plannedDurationLabel: String get() = "$plannedMinutes ${if (plannedMinutes == 1) "minute" else "minutes"}"
     fun remaining(now: WorkMoment): Long = if (state == WorkState.RUNNING && start?.boot == now.boot)
         (checkNotNull(deadline) - now.elapsed).coerceAtLeast(0) else 0
-    fun copyDraft() = WorkDraft(title = title, type = type, minutes = plannedMinutes.toString(), outcome = outcome ?: "")
+    fun copyDraft() = WorkDraft(title = title, type = type, minutes = plannedMinutes.toString(), outcome = outcome ?: "", description = description)
 }
 
 /** One durable span ID per capture admission. No photo means no coverage. */
@@ -87,7 +89,7 @@ data class WorkEditBuffer(val original: WorkSession, val draft: WorkDraft = orig
     val changed: Boolean get() = draft != original.editDraft()
 }
 
-private fun WorkSession.editDraft() = WorkDraft(id, title, type, plannedMinutes.toString(), outcome ?: "")
+private fun WorkSession.editDraft() = WorkDraft(id, title, type, plannedMinutes.toString(), outcome ?: "", description)
 
 object WorkEditPolicy {
     fun update(snapshot: WorkSnapshot, original: WorkSession, draft: WorkDraft): WorkSnapshot {
@@ -102,7 +104,7 @@ object WorkEditPolicy {
             "Original ended duration cannot change"
         }
         return snapshot.replace(original.copy(title = values.title, type = values.type,
-            plannedMinutes = values.plannedMinutes, outcome = values.outcome))
+            plannedMinutes = values.plannedMinutes, outcome = values.outcome, description = values.description))
     }
 }
 

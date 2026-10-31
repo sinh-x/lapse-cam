@@ -532,7 +532,8 @@ class CaptureViewModel @JvmOverloads constructor(
                 }, if (running == record.id) progress else 0, record.exportCycle.attempts, record.cleanupCycle.attempts,
                 record.error, record.output, (record.phase == SessionPhase.NEEDS_ATTENTION && record.cycle.exhausted) ||
                     (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()),
-                !record.busy && record.phase !in setOf(SessionPhase.DELETED, SessionPhase.FINISHED) && !record.cycle.reserved)
+                !record.busy && record.phase !in setOf(SessionPhase.DELETED, SessionPhase.FINISHED) && !record.cycle.reserved,
+                verifiedOperation = record.operation.takeIf { record.receipt != null && record.output != null })
         }
         post {
             mutableSessions.value = reviews.map { review ->

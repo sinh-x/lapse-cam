@@ -28,6 +28,7 @@ class VideoExporter(
     private val availableBytes: (File) -> Long = { android.os.StatFs(it.path).availableBytes },
     private val checkpoint: (String) -> Unit = {},
 ) {
+    private val inventoryFiles = filesDirectory
     private val attempts = File(filesDirectory, "export-attempts").apply { check(mkdirs() || isDirectory) }
     private val cache = File(cacheDirectory.canonicalFile, "export-attempts").apply {
         check(mkdirs() || isDirectory)
@@ -77,6 +78,7 @@ class VideoExporter(
         }
         reconcile()
         var attempt = Attempt(operationId ?: UUID.randomUUID().toString())
+        SyncMediaInventory.record(inventoryFiles, attempt.id, session.directory.name, selected.size, session.fps)
         writeAttempt(attempt) // Durable identity BEFORE encoding or inserting any external output.
         val temporary = File(cache, "${attempt.id}.mp4")
         try {

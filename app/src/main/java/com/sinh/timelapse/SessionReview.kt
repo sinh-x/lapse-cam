@@ -22,4 +22,5 @@ data class SessionReview(
     val output: String?,
     val canRetry: Boolean,
     val canDelete: Boolean,
+    val verifiedOperation: String? = null,
 )

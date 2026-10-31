@@ -24,7 +24,8 @@ class WorkSessionStoreTest {
         val file = File(root, "work-context/state.json")
         val oldJson = org.json.JSONObject(file.readText()).put("version", 1)
         oldJson.remove("deletedIds")
-        oldJson.getJSONArray("records").getJSONObject(0).remove("archived")
+        oldJson.getJSONArray("records").getJSONObject(0).apply { remove("archived"); remove("description") }
+        oldJson.getJSONObject("draft").remove("description")
         file.writeText(oldJson.toString())
         val before = file.readBytes()
         val media = File(root, "sessions/owned-sources").apply { mkdirs() }
@@ -39,7 +40,7 @@ class WorkSessionStoreTest {
         assertEquals(original.id, migrated.records.single().id)
         assertEquals(45, migrated.records.single().plannedMinutes)
         assertEquals(draft, migrated.draft)
-        assertEquals(2, org.json.JSONObject(file.readText()).getInt("version"))
+        assertEquals(3, org.json.JSONObject(file.readText()).getInt("version"))
         assertEquals("owned source fixture", photo.readText())
         reopened.archive(original.id, false)
         assertFalse(WorkSessionStore(root).load().records.single().archived)
@@ -180,7 +181,7 @@ class WorkSessionStoreTest {
     @Test fun corruptUnsupportedAndAliasedBytesAreRetainedAndBlockWrites() = isolated { root ->
         val folder = File(root, "work-context").apply { mkdir() }
         val file = File(folder, "state.json")
-        for (text in listOf("{broken", "{\"version\":3,\"draft\":null,\"records\":[],\"spans\":[]}")) {
+        for (text in listOf("{broken", "{\"version\":4,\"draft\":null,\"records\":[],\"spans\":[]}")) {
             file.writeText(text)
             val store = WorkSessionStore(root)
             assertThrows(Exception::class.java) { store.load() }

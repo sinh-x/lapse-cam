@@ -4,7 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkEditPolicyTest {
-    private val work = WorkDraft(title = "Original", type = "study", minutes = "1", outcome = "Read").validated(123)
+    private val work = WorkDraft(title = "Original", type = "study", minutes = "1", outcome = "Read", description = "Existing shared notes").validated(123)
     private val draft = WorkDraft(title = "Unsaved create", minutes = "45")
     private val snapshot = WorkSnapshot(draft = draft, records = listOf(work), deletedIds = setOf("deleted"))
     private fun now(elapsed: Long, boot: String = "boot") = WorkMoment(boot, elapsed, 100_000 + elapsed)
@@ -48,7 +48,7 @@ class WorkEditPolicyTest {
     }
     @Test fun validationEnforcesCodePointAndWholeMinuteLimitsWithoutTruncating() {
         val initial = edited(work)
-        listOf(initial.copy(title = " "), initial.copy(title = "😀".repeat(121)), initial.copy(outcome = "😀".repeat(2001)),
+        listOf(initial.copy(title = " "), initial.copy(title = "😀".repeat(121)), initial.copy(outcome = "😀".repeat(2001)), initial.copy(description = "😀".repeat(2001)),
             initial.copy(minutes = "0"), initial.copy(minutes = "1441"), initial.copy(minutes = "1.5"), initial.copy(minutes = "abc")).forEach {
             assertThrows(IllegalArgumentException::class.java) { WorkEditPolicy.update(snapshot, work, it) }
         }
@@ -57,6 +57,27 @@ class WorkEditPolicyTest {
             assertEquals("😀".repeat(120), result.records.single().title)
             assertEquals("😀".repeat(2000), result.records.single().outcome)
         }
+    }
+    @Test fun savedEditorRetainsSharedDescriptionAndCanUpdateItWithoutChangingTiming() {
+        val buffer = WorkEditBuffer(work)
+        assertEquals(work.description, buffer.draft.description)
+        assertFalse(buffer.changed)
+        assertEquals(snapshot, WorkEditPolicy.update(snapshot, work, buffer.draft))
+        val renamed = WorkEditPolicy.update(snapshot, work, buffer.draft.copy(title = "Renamed"))
+        assertEquals(work.copy(title = "Renamed"), renamed.records.single())
+        val changed = WorkEditPolicy.update(snapshot, work, buffer.draft.copy(description = "Updated notes"))
+        assertEquals(snapshot.copy(records = listOf(work.copy(description = "Updated notes"))), changed)
+        assertEquals(draft, changed.draft)
+    }
+    @Test fun incomingSharedDescriptionInvalidatesTheOldSavedEditor() {
+        val buffer = WorkEditBuffer(work)
+        val shared = SyncPolicy.patch(work, mapOf("description" to "Newer remote notes"))
+        val newer = snapshot.replace(shared)
+        assertThrows(IllegalArgumentException::class.java) {
+            WorkEditPolicy.update(newer, work, buffer.draft.copy(title = "Stale edit"))
+        }
+        assertEquals("Newer remote notes", newer.records.single().description)
+        assertEquals(work.description, buffer.draft.description)
     }
     @Test fun bufferIsSeparateUnchangedSaveIsNoOpAndOptionalValuesNormalize() {
         val buffer = WorkEditBuffer(work)

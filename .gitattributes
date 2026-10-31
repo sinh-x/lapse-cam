@@ -1,3 +1,6 @@
 * text=auto eol=lf
 *.bat text eol=crlf
 *.jar binary
+# Unified diff context encodes an empty source line as a single space.
+# Preserve fingerprinted patch bytes; applied Nix source is checked separately.
+docs/patches/*.patch whitespace=-blank-at-eol

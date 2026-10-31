@@ -122,16 +122,26 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
 
     companion object {
         private fun uuid(value: String) { require(UUID.fromString(value).toString() == value) }
-        internal fun validate(value: WorkSnapshot) {
+        internal fun validate(value: WorkSnapshot, sharedMetadata: Boolean = true) {
             require(value.records.map { it.id }.toSet().size == value.records.size)
             require(value.records.count { it.state == WorkState.RUNNING } <= 1)
             value.deletedIds.forEach(::uuid)
             require(value.records.none { it.id in value.deletedIds } && value.draft?.id !in value.deletedIds)
-            value.draft?.let { uuid(it.id); require(value.records.none { record -> record.id == it.id }); it.type?.let(WorkType::fromKey) }
+            value.draft?.let { draft ->
+                uuid(draft.id); require(value.records.none { record -> record.id == draft.id }); draft.type?.let(WorkType::fromKey)
+                // Invalid form values remain drafts, but never silently replace unpaired UTF-16 on disk.
+                require(listOf(draft.title, draft.minutes, draft.outcome, draft.description).all {
+                    SyncPolicy.validText(it, 0, Int.MAX_VALUE)
+                })
+            }
             value.records.forEach { work ->
                 uuid(work.id); require(work.createdAt >= 0)
-                require(WorkDraft(work.id, work.title, work.type, work.plannedMinutes.toString(), work.outcome ?: "")
-                    .validated(work.createdAt).copy(state = work.state, start = work.start, deadline = work.deadline,
+                if (!sharedMetadata) require(work.title == work.title.trim() &&
+                    (work.outcome == null || work.outcome.isNotBlank()) && work.description.isEmpty())
+                mapOf("title" to work.title, "type" to work.type, "description" to work.description,
+                    "expectedOutcome" to (work.outcome ?: "")).forEach(SyncPolicy::validate)
+                require(WorkDraft(work.id, work.title, work.type, work.plannedMinutes.toString(), work.outcome ?: "", work.description)
+                    .validated(work.createdAt).copy(title = work.title, outcome = work.outcome, state = work.state, start = work.start, deadline = work.deadline,
                         endElapsed = work.endElapsed, reason = work.reason, confirmedElapsed = work.confirmedElapsed, archived = work.archived) == work)
                 require(!work.archived || work.state != WorkState.RUNNING)
                 require(work.confirmedElapsed in 0..work.plannedMinutes * 60_000L)
@@ -165,14 +175,19 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
         }
         private fun obj(vararg pairs: Pair<String, Any?>) = JSONObject().also { json -> pairs.forEach { json.put(it.first, it.second ?: JSONObject.NULL) } }
         private fun moment(value: WorkMoment?) = value?.let { obj("boot" to it.boot, "elapsed" to it.elapsed, "epoch" to it.epoch) }
-        private fun draft(value: WorkDraft?) = value?.let { obj("id" to it.id, "title" to it.title, "type" to it.type, "minutes" to it.minutes, "outcome" to it.outcome) }
-        private fun encode(value: WorkSnapshot, version: Int = 2): JSONObject = obj("version" to version, "draft" to draft(value.draft),
+        private fun draft(value: WorkDraft?, version: Int) = value?.let { value ->
+            obj("id" to value.id, "title" to value.title, "type" to value.type, "minutes" to value.minutes, "outcome" to value.outcome).also {
+                if (version >= 3) it.put("description", value.description)
+            }
+        }
+        private fun encode(value: WorkSnapshot, version: Int = 3): JSONObject = obj("version" to version, "draft" to draft(value.draft, version),
             "records" to JSONArray().also { array -> value.records.forEach { work -> array.put(obj(
                 "id" to work.id, "createdAt" to work.createdAt, "title" to work.title, "type" to work.type,
                 "minutes" to work.plannedMinutes, "outcome" to work.outcome, "state" to work.state.name,
                 "start" to moment(work.start), "deadline" to work.deadline, "end" to work.endElapsed,
                 "reason" to work.reason?.name, "confirmed" to work.confirmedElapsed).also {
                     if (version >= 2) it.put("archived", work.archived)
+                    if (version >= 3) it.put("description", work.description)
                 }) } },
             "spans" to JSONArray().also { array -> value.spans.forEach { span -> array.put(obj(
                 "id" to span.id, "recording" to span.recordingId, "admitted" to moment(span.admitted),
@@ -191,21 +206,25 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
         }
         private fun decode(json: JSONObject): WorkSnapshot {
             val version = number(json, "version")
-            require(version == 1L || version == 2L) { "Unsupported work storage version; retained" }
+            require(version in 1L..3L) { "Unsupported work storage version; retained" }
             if (version == 1L) keys(json, "version", "draft", "records", "spans")
             else keys(json, "version", "draft", "records", "spans", "deletedIds")
             val draft = if (json.isNull("draft")) null else json.getJSONObject("draft").let {
-                keys(it, "id", "title", "type", "minutes", "outcome")
-                WorkDraft(text(it, "id"), text(it, "title"), nullableText(it, "type"), text(it, "minutes"), text(it, "outcome"))
+                val names = arrayOf("id", "title", "type", "minutes", "outcome")
+                keys(it, *(if (version >= 3L) names + "description" else names))
+                WorkDraft(text(it, "id"), text(it, "title"), nullableText(it, "type"), text(it, "minutes"), text(it, "outcome"),
+                    if (version >= 3L) text(it, "description") else "")
             }
             fun <T> array(name: String, read: (JSONObject) -> T): List<T> = json.getJSONArray(name).let { a -> (0 until a.length()).map { read(a.getJSONObject(it)) } }
             val records = array("records") {
                 val names = arrayOf("id", "createdAt", "title", "type", "minutes", "outcome", "state", "start", "deadline", "end", "reason", "confirmed")
-                keys(it, *(if (version == 1L) names else names + "archived"))
+                keys(it, *(names + (if (version >= 2L) arrayOf("archived") else emptyArray()) +
+                    (if (version >= 3L) arrayOf("description") else emptyArray())))
                 WorkSession(text(it, "id"), number(it, "createdAt"), text(it, "title"), text(it, "type"), Math.toIntExact(number(it, "minutes")),
                     nullableText(it, "outcome"), WorkState.valueOf(text(it, "state")),
                     if (it.isNull("start")) null else readMoment(it.getJSONObject("start")), nullableNumber(it, "deadline"), nullableNumber(it, "end"),
-                    nullableText(it, "reason")?.let(WorkEnd::valueOf), number(it, "confirmed"), if (version == 1L) false else it.get("archived") as Boolean)
+                    nullableText(it, "reason")?.let(WorkEnd::valueOf), number(it, "confirmed"), if (version == 1L) false else it.get("archived") as Boolean,
+                    if (version >= 3L) text(it, "description") else "")
             }
             val spans = array("spans") {
                 keys(it, "id", "recording", "admitted", "first", "end", "unknownTail", "confirmedThrough")
@@ -216,7 +235,7 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
                 (0 until a.length()).map { a.get(it) as String }
             }
             require(deleted.toSet().size == deleted.size) { "Duplicate deleted identity; retained" }
-            return WorkSnapshot(draft, records, spans, deleted.toSet()).also(::validate)
+            return WorkSnapshot(draft, records, spans, deleted.toSet()).also { validate(it, version >= 3L) }
         }
     }
 }

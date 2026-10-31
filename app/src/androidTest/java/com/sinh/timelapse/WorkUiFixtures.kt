@@ -18,6 +18,13 @@ internal object WorkUiFixtures {
     }
     fun emptyActivity(): ActivityScenario<MainActivity> {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        val syncFile = java.io.File(context.filesDir, "private-sync/state.json")
+        if (syncFile.exists()) {
+            val sync = org.json.JSONObject(syncFile.readText())
+            check(sync.getInt("version") == 1 && !sync.getBoolean("enabled") && sync.getString("endpoint").isEmpty() && sync.getString("credential").isEmpty()) {
+                "Enrolled/unknown sync context retained; fresh disposable fixture context required"
+            }
+        }
         check(context.getSharedPreferences("capture-defaults", 0).all.isEmpty()) { "Existing defaults retained; disposable context required" }
         check(context.getSharedPreferences("exports", 0).all.isEmpty()) { "Existing exports retained" }
         val sessions = java.io.File(context.filesDir, "sessions")
