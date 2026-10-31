@@ -2,6 +2,7 @@ package com.sinh.timelapse
 
 import android.Manifest
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -14,12 +15,19 @@ import android.provider.Settings
 import android.util.Rational
 import android.util.Size
 import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.ViewGroup
+import android.view.WindowInsetsController
 import android.view.Surface
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.widget.*
 import android.text.InputType
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.camera.core.CameraSelector
@@ -30,6 +38,8 @@ import androidx.camera.core.ViewPort
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.lifecycle.Lifecycle
 import java.time.ZoneId
 import java.util.Locale
@@ -42,10 +52,13 @@ class MainActivity : ComponentActivity() {
     private var sharedView: SharedHistoryView? = null
     private var downloadVideo: org.json.JSONObject? = null
     private var downloadMobileConsent = false
+    private var downloadPickerPending = false
     private val createSyncDownload = registerForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
         val video = downloadVideo; downloadVideo = null
         if (uri != null && video != null) sync.download(video, uri, downloadMobileConsent)
         downloadMobileConsent = false
+        downloadPickerPending = false
+        updateBlackout()
     }
     private lateinit var preview: PreviewView
     private lateinit var clock: TimestampPreview
@@ -85,6 +98,28 @@ class MainActivity : ComponentActivity() {
     private var requestedLens: SessionLens? = null
     private var bindingGeneration = 0L
     private var activityForeground = false
+    private var activityFocused = false
+    private var activityDestroyed = false
+    private val blackout = BlackoutPolicy { android.os.SystemClock.elapsedRealtime() }
+    private lateinit var cameraUi: ViewGroup
+    private lateinit var blackoutCover: FrameLayout
+    private lateinit var blackoutBanner: TextView
+    private lateinit var blackoutToggle: CheckBox
+    private var blackoutLive = false
+    private var blackoutCameraReady = false
+    private var blackoutError = false
+    private var modalDepth = 0
+    private var touchActive = false
+    private var consumingTouch = false
+    private val heldKeys = mutableSetOf<Int>()
+    private val consumedKeys = mutableSetOf<Int>()
+    private var armedBlackout: BlackoutPolicy.Timer? = null
+    private var blackoutCallback: Runnable? = null
+    private var savedBarAppearance = 0
+    private var savedBarBehavior = WindowInsetsController.BEHAVIOR_DEFAULT
+    private val blackoutBack = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() { returnFromBlackout() }
+    }
     private val handler = Handler(Looper.getMainLooper())
     private var nextWorkTick = 0L
     private var pendingWorkId: String? = null
@@ -105,9 +140,9 @@ class MainActivity : ComponentActivity() {
     private val requestNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         work.reconcile()
         if (allowed) Toast.makeText(this, "Notification permission allowed. See End reminder settings for background timing status.", Toast.LENGTH_LONG).show()
-        else AlertDialog.Builder(this).setTitle("Notifications are not allowed")
+        else showBlackoutModal(AlertDialog.Builder(this).setTitle("Notifications are not allowed")
             .setMessage("The timebox still works, but its end alert cannot appear. You can enable this app's notifications in Android settings. Background timing is a separate setting.")
-            .setNegativeButton("Not now", null).setPositiveButton("Open notification settings") { _, _ -> openTimeboxNotificationSettings() }.show()
+            .setNegativeButton("Not now", null).setPositiveButton("Open notification settings") { _, _ -> openTimeboxNotificationSettings() }.create())
     }
     private val requestCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         if (allowed) { invalidateCamera(); bindCamera() }
@@ -120,6 +155,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, blackoutBack)
+        // Use Android's public Window boundary; ComponentActivity's key override is restricted.
+        val originalCallback = window.callback
+        window.callback = object : Window.Callback by originalCallback {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+                dispatchBlackoutKey(event) { originalCallback.dispatchKeyEvent(event) }
+        }
         model.state.observe(this) { state ->
             renderCapture(state); bindCamera()
             if (!state.loading && !state.recoveryBlocked) sync.backfillAssociations(model.sessions.value.orEmpty())
@@ -135,6 +177,8 @@ class MainActivity : ComponentActivity() {
         sync.state.observe(this) { sharedView?.render(it) }
         downloadVideo = savedInstanceState?.getString("syncDownloadVideo")?.let { org.json.JSONObject(it) }
         downloadMobileConsent = savedInstanceState?.getBoolean("syncDownloadMobile") ?: false
+        downloadPickerPending = savedInstanceState?.getBoolean("syncDownloadPending") ?: false
+        updateBlackout()
         pendingWorkId = intent.getStringExtra("workId")
         if (savedInstanceState?.getBoolean("workOpen") == true) {
             showWork(savedInstanceState.getString("workId"))
@@ -205,6 +249,10 @@ class MainActivity : ComponentActivity() {
         }
         if (state.capturing || state.savingPhoto || state.exporting) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        blackoutLive = ui.live
+        blackoutCameraReady = state.boundLens == state.lens && !state.loading && !state.recoveryBlocked && !state.switching && !state.working
+        blackoutError = actionable
+        updateBlackout()
     }
 
     private fun buildUi(saved: Bundle?) {
@@ -225,6 +273,12 @@ class MainActivity : ComponentActivity() {
         listOf(lens, label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not work minutes", 14f), maxSeconds,
             label("Adaptive auto-split (active recording time)", 14f), split, interval, fps).forEach { capturePanel.addView(it) }
         capturePanel.addView(label("With 2h/3h, Pause retains the session; Finish exports. Only verified output permits source cleanup. Off/Fixed/legacy remain manual. Foreground only; no cadence/storage guarantee.", 14f))
+        blackoutToggle = CheckBox(this).apply {
+            text = "Blackout screen while recording"; setTextColor(Color.WHITE); minHeight = dp(48)
+            isChecked = defaults.blackoutEnabled
+            setOnCheckedChangeListener { _, enabled -> defaults.blackoutEnabled = enabled; updateBlackout() }
+        }
+        capturePanel.addView(blackoutToggle)
         mode.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val enabled = model.state.value?.canSelectLens == true
@@ -246,6 +300,17 @@ class MainActivity : ComponentActivity() {
         } }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)); setPadding(dp(8), 0, dp(8), 0)
+        }
+        root.accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onRequestSendAccessibilityEvent(host: ViewGroup, child: View, event: AccessibilityEvent): Boolean {
+                if (event.eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED ||
+                    event.eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+                    event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+                    event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
+                    blackout.interact(); updateBlackout()
+                }
+                return super.onRequestSendAccessibilityEvent(host, child, event)
+            }
         }
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
@@ -299,7 +364,162 @@ class MainActivity : ComponentActivity() {
         root.addView(controls)
         root.addView(Button(this).apply { text = "Recording details"; setOnClickListener { showRecordingDetails() } })
         root.addView(Button(this).apply { text = "Private sync / shared history"; setOnClickListener { showSharedHistory() } })
-        setContentView(root); root.requestApplyInsets()
+        cameraUi = root
+        blackoutBanner = label("LIVE — recording", 16f).apply {
+            gravity = Gravity.CENTER; setBackgroundColor(Color.rgb(170, 0, 0))
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        blackoutCover = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK); visibility = View.GONE
+            isClickable = true; isFocusable = true; isFocusableInTouchMode = true
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            contentDescription = "Recording timelapse. Timelapse recording continues."
+            setOnClickListener { returnFromBlackout() }
+            setPadding(0, dp(16), 0, 0)
+            setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+                view.setPadding(bars.left, bars.top + dp(16), bars.right, bars.bottom); insets
+            }
+            addView(blackoutBanner, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        }
+        ViewCompat.replaceAccessibilityAction(blackoutCover, AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
+            "Return to Camera; timelapse recording continues") { _, _ -> returnFromBlackout(); true }
+        val host = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(root, FrameLayout.LayoutParams(-1, -1))
+            addView(blackoutCover, FrameLayout.LayoutParams(-1, -1))
+        }
+        setContentView(host); root.requestApplyInsets(); blackoutCover.requestApplyInsets()
+    }
+
+    /** Top-level lifetime plus actual Activity focus covers nested Dialog windows too. */
+    private fun showBlackoutModal(dialog: Dialog, dismissed: () -> Unit = {}) {
+        modalDepth++; updateBlackout()
+        dialog.setOnDismissListener { modalDepth--; dismissed(); updateBlackout() }
+        dialog.show()
+    }
+
+    private fun updateBlackout() {
+        if (!::blackoutCover.isInitialized || activityDestroyed) return
+        blackout.update(BlackoutPolicy.Input(
+            enabled = defaults.blackoutEnabled, live = blackoutLive, cameraReady = blackoutCameraReady,
+            foreground = activityForeground, focused = activityFocused,
+            modal = modalDepth > 0 || downloadPickerPending,
+            actionableError = blackoutError || work.state.value?.error != null || model.sessions.value.orEmpty().any { it.canRetry || it.error.isNotEmpty() },
+            // A return gesture keeps an existing cover until completion. If a real error
+            // removes it first, held input still blocks rearming. Consumption markers survive
+            // focus loss to swallow orphaned UP events, but are not indefinitely held input.
+            interacting = !blackout.covered && (touchActive || heldKeys.isNotEmpty()),
+        ))
+        renderBlackout()
+    }
+
+    private fun renderBlackout() {
+        val visible = blackout.covered
+        if (::blackoutCover.isInitialized && (blackoutCover.visibility == View.VISIBLE) != visible) {
+            if (visible) {
+                cameraUi.clearFocus()
+                cameraUi.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                cameraUi.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                window.insetsController?.let { controller ->
+                    savedBarAppearance = controller.systemBarsAppearance
+                    savedBarBehavior = controller.systemBarsBehavior
+                    controller.setSystemBarsAppearance(0, LIGHT_SYSTEM_BARS)
+                    controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    controller.hide(android.view.WindowInsets.Type.systemBars())
+                }
+                blackoutCover.visibility = View.VISIBLE
+                blackoutCover.requestApplyInsets(); blackoutCover.requestFocus()
+            } else {
+                blackoutCover.visibility = View.GONE
+                cameraUi.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+                cameraUi.descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+                // Neutral focus: never restore Pause/Finish or a navigation button.
+                cameraUi.isFocusableInTouchMode = true; cameraUi.requestFocus()
+                window.insetsController?.let { controller ->
+                    controller.show(android.view.WindowInsets.Type.systemBars())
+                    controller.systemBarsBehavior = savedBarBehavior
+                    controller.setSystemBarsAppearance(savedBarAppearance, LIGHT_SYSTEM_BARS)
+                }
+            }
+        }
+        blackoutBack.isEnabled = visible
+        val timer = blackout.timer
+        if (timer != armedBlackout) {
+            blackoutCallback?.let(handler::removeCallbacks)
+            armedBlackout = timer
+            blackoutCallback = timer?.let { expected -> Runnable {
+                if (activityDestroyed || armedBlackout != expected) return@Runnable
+                // Latest model/window signals are applied before accepting this generation.
+                updateBlackout()
+                blackout.timeout(expected)
+                renderBlackout()
+            } }
+            blackoutCallback?.let { handler.postDelayed(it, (timer!!.deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0)) }
+        }
+    }
+
+    private fun returnFromBlackout() {
+        // Accessibility/programmatic clicks cannot split a still-held physical gesture/key.
+        if (touchActive || heldKeys.isNotEmpty()) return
+        blackout.interact(); updateBlackout()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        activityFocused = hasFocus
+        if (!hasFocus) { touchActive = false; heldKeys.clear() }
+        updateBlackout()
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (consumingTouch || blackout.covered) {
+            consumingTouch = true
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) touchActive = true
+            // Keep consuming even if an error/pause removes the cover during this gesture.
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                consumingTouch = false; touchActive = false
+                blackout.interact(); updateBlackout()
+            }
+            return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchActive = true; blackout.interact(); updateBlackout()
+        }
+        return try { super.dispatchTouchEvent(event) } finally {
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                touchActive = false; blackout.interact(); updateBlackout()
+            }
+        }
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (blackout.covered) {
+            // Hover must still reach the accessible return node; scrolling cannot reach Camera.
+            if (event.actionMasked == MotionEvent.ACTION_SCROLL) return true
+        } else {
+            blackout.interact(); updateBlackout()
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    private fun dispatchBlackoutKey(event: KeyEvent, dispatch: () -> Boolean): Boolean {
+        val key = event.keyCode
+        val activation = key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+            key == KeyEvent.KEYCODE_SPACE || key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_BACK
+        if (key in consumedKeys || blackout.covered) {
+            if (event.action == KeyEvent.ACTION_DOWN) { consumedKeys.add(key); heldKeys.add(key) }
+            if (event.action == KeyEvent.ACTION_UP) {
+                consumedKeys.remove(key); heldKeys.remove(key)
+                if (activation && heldKeys.isEmpty()) returnFromBlackout() else updateBlackout()
+            }
+            return true
+        }
+        if (event.action == KeyEvent.ACTION_DOWN) { heldKeys.add(key); blackout.interact(); updateBlackout() }
+        return try { dispatch() } finally {
+            if (event.action == KeyEvent.ACTION_UP) { heldKeys.remove(key); blackout.interact(); updateBlackout() }
+        }
     }
 
     private fun captureAction() {
@@ -320,7 +540,8 @@ class MainActivity : ComponentActivity() {
     private fun showSettings(timestamp: Boolean = false) {
         if (sheet?.isShowing == true) return
         sheet = CameraSettingsSheet(this, capturePanel, timestampPanel, timestamp).apply {
-            setLocked(model.state.value?.canSelectLens != true); setOnDismissListener { sheet = null }; show()
+            setLocked(model.state.value?.canSelectLens != true)
+            showBlackoutModal(this) { sheet = null }
         }
     }
     private var stampFields: List<Spinner> = emptyList()
@@ -374,7 +595,7 @@ class MainActivity : ComponentActivity() {
         (statistics.parent as? android.view.ViewGroup)?.removeView(statistics)
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(8)); setBackgroundColor(Color.rgb(16, 25, 22)); addView(statistics) }
         panel.addView(label(model.state.value?.message ?: "Ready", 14f))
-        AlertDialog.Builder(this).setTitle("Recording details").setView(ScrollView(this).apply { addView(panel) }).setPositiveButton("Close", null).show()
+        showBlackoutModal(AlertDialog.Builder(this).setTitle("Recording details").setView(ScrollView(this).apply { addView(panel) }).setPositiveButton("Close", null).create())
     }
     private fun configureTimeboxNotifications() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) openTimeboxNotificationSettings()
@@ -398,12 +619,14 @@ class MainActivity : ComponentActivity() {
     private fun showSharedHistory() {
         val view = SharedHistoryView(this, sync) { video, mobile ->
             downloadVideo = org.json.JSONObject(video.toString()); downloadMobileConsent = mobile
-            createSyncDownload.launch("Timelapse-${video.getString("id")}.mp4")
+            downloadPickerPending = true; updateBlackout()
+            try { createSyncDownload.launch("Timelapse-${video.getString("id")}.mp4") }
+            catch (error: RuntimeException) { downloadPickerPending = false; updateBlackout(); throw error }
         }
         sharedView = view
         sync.state.value?.let(view::render)
         AlertDialog.Builder(this).setTitle("Private shared history").setView(view).setPositiveButton("Close", null)
-            .create().apply { setOnDismissListener { sharedView = null }; show() }
+            .create().also { showBlackoutModal(it) { sharedView = null } }
     }
 
     private fun showWork(id: String? = null) {
@@ -411,7 +634,10 @@ class MainActivity : ComponentActivity() {
         val view = WorkSessionsView(this, work, { model.sessions.value.orEmpty() }, ::openSessionVideo,
             ::configureTimeboxNotifications, ::configureBackgroundTiming, id)
         workView = view
-        workDialog = WorkDialog(this, view) { workView = null; workDialog = null }.apply { show() }
+        modalDepth++; updateBlackout()
+        workDialog = WorkDialog(this, view) {
+            workView = null; workDialog = null; modalDepth--; updateBlackout()
+        }.apply { show() }
     }
     private fun renderWork() {
         if (!::workTitle.isInitialized) return
@@ -423,6 +649,9 @@ class MainActivity : ComponentActivity() {
         workRemaining.visibility = if (workRemaining.text.isEmpty()) View.GONE else View.VISIBLE
         workEnd.visibility = if (running == null) View.GONE else View.VISIBLE; workEnd.isEnabled = state.loaded
         workView?.render(state)
+        if (state.loaded) blackout.observeTerminals(state.snapshot.records.filter { it.state == WorkState.ENDED }
+            .map { "${it.id}:${it.reason}:${it.endElapsed}" }.toSet())
+        updateBlackout()
         if (state.loaded && pendingWorkId != null) { val id = pendingWorkId; pendingWorkId = null; showWork(id) }
     }
     private fun showSessions() {
@@ -437,7 +666,8 @@ class MainActivity : ComponentActivity() {
         })
         panel.addView(view, LinearLayout.LayoutParams(-1, 0, 1f)); sessionsView = view; view.render(model.sessions.value.orEmpty())
         AlertDialog.Builder(this).setTitle("Sessions").setView(panel).setPositiveButton("Close", null).create().apply {
-            setOnDismissListener { sessionsView = null }; setOnShowListener { window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.90).toInt()) }; show()
+            setOnShowListener { window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.90).toInt()) }
+            showBlackoutModal(this) { sessionsView = null }
         }
     }
     private fun showRecordingLinks(id: String) {
@@ -448,11 +678,11 @@ class MainActivity : ComponentActivity() {
             panel.addView(label("Timebox ${link.workId}\n${WorkSessionsView.linkText(link)}", 14f))
             panel.addView(Button(this).apply { text = "Open timebox ${link.workId}"; setOnClickListener { showWork(link.workId) } })
         }
-        AlertDialog.Builder(this).setTitle("Recording $id").setView(ScrollView(this).apply { addView(panel) }).setPositiveButton("Close", null).show()
+        showBlackoutModal(AlertDialog.Builder(this).setTitle("Recording $id").setView(ScrollView(this).apply { addView(panel) }).setPositiveButton("Close", null).create())
     }
     private fun confirmDelete(id: String, explanation: String) {
-        AlertDialog.Builder(this).setTitle("Delete source photos?").setMessage("Session $id\n$explanation")
-            .setNegativeButton("Cancel", null).setPositiveButton("Delete source photos") { _, _ -> model.deleteSessionSources(id) }.show()
+        showBlackoutModal(AlertDialog.Builder(this).setTitle("Delete source photos?").setMessage("Session $id\n$explanation")
+            .setNegativeButton("Cancel", null).setPositiveButton("Delete source photos") { _, _ -> model.deleteSessionSources(id) }.create())
     }
     private fun openSessionVideo(id: String) { model.openSessionVideo(id) { uri -> if (!isDestroyed) {
         if (uri == null) {
@@ -507,15 +737,24 @@ class MainActivity : ComponentActivity() {
         outState.putString("workTypeFilter", workView?.activityTypeFilter()); outState.putString("workSort", workView?.listSort())
         outState.putString("syncDownloadVideo", downloadVideo?.toString())
         outState.putBoolean("syncDownloadMobile", downloadMobileConsent)
+        outState.putBoolean("syncDownloadPending", downloadPickerPending)
         super.onSaveInstanceState(outState)
     }
     override fun onStart() {
-        super.onStart(); activityForeground = true; model.setForeground(true); work.reconcile(); handler.post(clockTick); bindCamera()
+        super.onStart(); activityForeground = true; model.setForeground(true); work.reconcile(); handler.post(clockTick); bindCamera(); updateBlackout()
     }
     override fun onStop() {
-        activityForeground = false; invalidateCamera(); model.setForeground(false); handler.removeCallbacks(clockTick); super.onStop()
+        activityForeground = false; activityFocused = false; touchActive = false; heldKeys.clear()
+        updateBlackout()
+        invalidateCamera(); model.setForeground(false); handler.removeCallbacks(clockTick); super.onStop()
     }
-    override fun onDestroy() { sheet?.dismiss(); workDialog?.dismiss(); super.onDestroy() }
+    override fun onDestroy() {
+        activityDestroyed = true; blackout.close(); renderBlackout()
+        sheet?.dismiss(); workDialog?.dismiss(); super.onDestroy()
+    }
+    private companion object {
+        const val LIGHT_SYSTEM_BARS = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+    }
     private fun duration(millis: Long): String { val s = millis.coerceAtLeast(0) / 1000; return String.format(Locale.ROOT, "%02d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) }
     private fun hasCameraPermission() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
