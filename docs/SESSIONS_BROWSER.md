@@ -50,7 +50,8 @@ checks; cleanup still requires full publication verification, not a read check.
 
 ## Bounded output observation
 
-`output-observations.json` is an independent version-1 AtomicFile sidecar owned
+`output-observations.json` is an independent AtomicFile sidecar (writes version 2,
+reads versions 1 and 2) owned
 by the serialized session executor. It does not rewrite the session index,
 receipts, operation identities, attempts or original media. Missing sidecar is
 compatible with old stores; corrupt/unknown evidence is retained and reported
@@ -64,7 +65,16 @@ a missing-video error. Results carry session/URI/known-operation identity and
 are rejected if that output changed. Persisted evidence distinguishes readable,
 missing, permission-blocked, unreadable and unknown, with observation/attempt
 times. An inconclusive attempt cannot erase a previous conclusive problem.
-Successful current reads resolve only the corresponding output issue.
+Successful current reads resolve only the corresponding availability issue.
+The owner-approved diagnostic extension also retains one last observed manual
+export failure per session (operation identity, proven stage or Unknown, reason,
+and observation time). It survives process restart without a second queue,
+retry budget or deletion authority. A read/Recheck or acknowledgement cannot
+clear that failure. Only a proven publication success from the actual current
+manual producer resolves that session's manual failure; stale operation results
+cannot overwrite or resolve another attempt. Version-1 evidence loads without a
+write; the next evidence mutation upgrades while retaining availability data.
+Corrupt, duplicate or unknown fields remain retained and block overwrites.
 
 ## Processing and bounded updates
 
@@ -90,7 +100,12 @@ reused while IDs/start dates/attention membership remain unchanged, but current
 status/action labels still come from the latest snapshot. Causal snapshots are
 cached only between real transitions and expose an unmodifiable details map.
 No publication verification, inventory validation or durable attempt accounting
-was removed to improve timings.
+was removed to improve timings. Sync source observation now reports whether it
+actually added a source mutation; identical observations avoid rewriting the
+whole sync file or cloning/publishing an unchanged pending-request backlog to
+the UI. Strict store reads and a final byte/path/identity validation still run
+on no-ops; changed live links, tombstones and source transitions still enqueue,
+commit and publish in order.
 
 ## Validation boundaries
 
@@ -102,9 +117,8 @@ capture cadence, text scaling/TalkBack, physical blackout behavior, process-deat
 navigation, lifecycle notifications or full UAT. Preserve failed/censored runs
 and do not relax frozen budgets to make them pass.
 
-The legacy/manual workflow did not persist export-error provenance. Its new
-current-owner manual failure review survives Activity recreation via the model,
-but **not process restart**; no new duplicate durable processing journal was
-introduced. Persistent historical failures still use the existing repository,
-and output observations persist separately. This limitation and any remaining
+Legacy/manual failures that predate diagnostic evidence cannot be reconstructed
+or assigned an invented stage. Newly observed manual failures persist as the
+owner-approved diagnostic evidence above, not a processing authority. Persistent
+historical queue failures still use their existing repository. Remaining
 performance/device failures require owner review before integration acceptance.

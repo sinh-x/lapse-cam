@@ -35,6 +35,14 @@ internal object SessionProcessingProjection {
     }
 }
 
+/** Observed diagnostic only: never a queue entry, retry reservation or deletion receipt. */
+data class ManualOutputFailure(val sessionId: String, val operation: String, val stage: ProcessingStage,
+    val observedAt: Long, val reason: String) {
+    init { require(sessionId.isNotBlank() && operation.isNotBlank() && observedAt >= 0 && reason.isNotBlank()) }
+    val issue: SessionIssue get() = SessionIssue(stage,
+        "Last manual export failure (${java.time.Instant.ofEpochMilli(observedAt)}): $reason")
+}
+
 enum class OutputAvailability(val label: String) {
     READABLE("Readable at last check"), MISSING("Video missing"), PERMISSION_BLOCKED("Video permission blocked"),
     UNREADABLE("Video unreadable"), UNKNOWN("Video availability unknown");

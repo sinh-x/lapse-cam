@@ -92,6 +92,7 @@ class CaptureViewModel @JvmOverloads constructor(
     private var manualActive: ActiveProcessing? = null
     private var deletionActive: ActiveProcessing? = null
     private val manualIssues = mutableMapOf<String, SessionIssue>()
+    private val pendingManualEvidence = mutableMapOf<String, ManualOutputFailure>()
     private val mutableProcessing = MutableLiveData<List<ActiveProcessing>>(emptyList())
     val processing: LiveData<List<ActiveProcessing>> = mutableProcessing
     private data class ReviewDelivery(val values: List<SessionReview>, val active: List<ActiveProcessing>)
@@ -554,7 +555,6 @@ class CaptureViewModel @JvmOverloads constructor(
                 admitted = exportQueue?.beginManual() == true
                 check(admitted) { "Automatic export busy. Try manual export when it finishes" }
                 val operation = java.util.UUID.randomUUID().toString()
-                manualIssues.remove(session.directory.name)
                 manualActive = ActiveProcessing(session.directory.name, operation, ProcessingStage.EXPORTING)
                 publishSessions()
                 val frames = store.exportFrames(session)
@@ -573,13 +573,20 @@ class CaptureViewModel @JvmOverloads constructor(
                             manualProgress.offer(ActiveProcessing(session.directory.name, operation, ProcessingStage.EXPORTING, progress.coerceIn(0, 100)))
                         }
                         rememberVideo(uri, session.directory.name)
-                        worker.execute { manualActive = null; refreshManualReview(session); publishSessions() }
+                        worker.execute {
+                            val active = manualActive?.takeIf { it.sessionId == session.directory.name && it.operation == operation }
+                            if (active != null) runCatching {
+                                if (outputEvidence.resolveManualFailure(session.directory.name, operation, active.operation)) {
+                                    pendingManualEvidence.remove(session.directory.name); manualIssues.remove(session.directory.name)
+                                }
+                            }.onFailure(::reportOutputEvidenceFailure)
+                            manualActive = null; refreshManualReview(session); publishSessions()
+                        }
                         post { update(current.copy(exporting = false, video = uri, messageImpact = CaptureMessageImpact.ROUTINE,
                             message = "Saved to Movies/TimestampTimelapse. Photos kept for re-export.")) }
                     } catch (error: Exception) {
                         worker.execute {
-                            manualIssues[session.directory.name] = SessionIssue(manualActive?.stage ?: ProcessingStage.UNKNOWN,
-                                error.message ?: "Manual export failed; photos retained")
+                            rememberManualOutputFailure(session.directory.name, operation, error)
                             manualActive = null; publishSessions()
                         }
                         post { fail(error) }
@@ -587,12 +594,27 @@ class CaptureViewModel @JvmOverloads constructor(
                     finally { worker.execute { manualActive = null; exportQueue?.endManual(); publishSessions() } }
                 }
             } catch (error: Exception) {
-                if (admitted) manualIssues[session.directory.name] = SessionIssue(manualActive?.stage ?: ProcessingStage.UNKNOWN,
-                    error.message ?: "Manual export could not start; photos retained")
+                if (admitted) manualActive?.operation?.let { rememberManualOutputFailure(session.directory.name, it, error) }
                 manualActive = null; if (admitted) exportQueue?.endManual(); publishSessions()
                 post { fail(error) }
             }
         }
+    }
+
+    private fun reportOutputEvidenceFailure(error: Throwable) {
+        post {
+            val detail = "Output review evidence unavailable: ${error.message}. Diagnostics retained where possible; count may be incomplete."
+            outputReviewError.value = detail; attention.failure("output-review", detail)
+        }
+    }
+    private fun rememberManualOutputFailure(sessionId: String, operation: String, error: Exception) {
+        val active = manualActive?.takeIf { it.sessionId == sessionId && it.operation == operation } ?: return
+        val failure = ManualOutputFailure(sessionId, operation, active.stage, epochMillis().coerceAtLeast(0),
+            error.message?.takeIf { it.isNotBlank() } ?: "Manual export failed; retained source photos unchanged")
+        pendingManualEvidence[sessionId] = failure; manualIssues[sessionId] = failure.issue
+        runCatching {
+            if (outputEvidence.recordManualFailure(failure, active.operation)) pendingManualEvidence.remove(sessionId)
+        }.onFailure(::reportOutputEvidenceFailure)
     }
 
     private fun rememberVideo(uri: Uri, sessionId: String? = null) {
@@ -615,8 +637,16 @@ class CaptureViewModel @JvmOverloads constructor(
     private fun publishSessions(running: String? = reviewRunning, progress: Int = reviewProgress) {
         reviewRunning = running
         reviewProgress = progress
+        val evidenceError = runCatching { outputEvidence.load() }.exceptionOrNull()?.let {
+            "Output review unavailable: ${it.message}. Existing evidence retained; attention count may be incomplete."
+        }
+        if (evidenceError == null) {
+            manualIssues.clear()
+            outputEvidence.manualFailures().forEach { manualIssues[it.sessionId] = it.issue }
+        }
+        pendingManualEvidence.values.forEach { manualIssues[it.sessionId] = it.issue }
         val key = listOf(repository.revision, manualRevision, reviewRunning, reviewProgress, outputEvidence.revision,
-            manualActive, deletionActive, exportQueue?.active, manualIssues.toMap(), foreground)
+            manualActive, deletionActive, exportQueue?.active, manualIssues.toMap(), foreground, evidenceError)
         if (key == lastReviewKey) return
         val baseKey = repository.revision to foreground
         if (recordReviewKey != baseKey) {
@@ -657,13 +687,14 @@ class CaptureViewModel @JvmOverloads constructor(
             if (active == null) review else review.copy(progress = active.percent ?: 0,
                 processing = review.processing.copy(active = active, wait = ProcessingWait.NONE))
         }
-        val evidenceError = runCatching { outputEvidence.load() }.exceptionOrNull()?.let {
-            "Output review unavailable: ${it.message}. Existing evidence retained; attention count may be incomplete."
-        }
         val decorated = reviews.map { review ->
             val observation = if (evidenceError == null && review.output != null) outputEvidence.observation(review.outputIdentity)
                 else review.outputObservation
-            if (observation == review.outputObservation) review else review.copy(outputObservation = observation)
+            val manualIssue = manualIssues[review.id]
+            val processing = if (manualIssue != null && manualIssue !in review.processing.issues)
+                review.processing.copy(issues = review.processing.issues + manualIssue) else review.processing
+            if (observation == review.outputObservation && processing == review.processing) review
+                else review.copy(outputObservation = observation, processing = processing)
         }
         val observeAttention = attentionRevision != repository.revision
         attentionRevision = repository.revision

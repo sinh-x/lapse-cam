@@ -166,13 +166,14 @@ class AppBaselineTest {
         return JSONObject().put("samples", sorted.size).put("p50Millis", p(.5)).put("p95Millis", p(.95))
             .put("maxMillis", sorted.lastOrNull() ?: -1)
     }
-    private fun waitFor(scenario: ActivityScenario<MainActivity>, predicate: (CaptureViewModel.State) -> Boolean) {
+    private fun waitFor(activity: MainActivity, predicate: (CaptureViewModel.State) -> Boolean) {
         var observed: CaptureViewModel.State? = null
         val end = SystemClock.elapsedRealtime() + 180_000
         while (SystemClock.elapsedRealtime() < end) {
             var ready = false
-            scenario.onActivity {
-                observed = ViewModelProvider(it)[CaptureViewModel::class.java].state.value!!
+            instrumentation.runOnMainSync {
+                check(!activity.isDestroyed) { "Observed Activity was destroyed" }
+                observed = ViewModelProvider(activity)[CaptureViewModel::class.java].state.value!!
                 ready = predicate(checkNotNull(observed))
             }
             if (ready) return
@@ -253,11 +254,20 @@ class AppBaselineTest {
         val start = SystemClock.elapsedRealtime()
         val launch = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        ActivityScenario.launch<MainActivity>(launch).use { scenario ->
+        ActivityScenario.launch<MainActivity>(launch).use {
+            lateinit var observedActivity: MainActivity
+            instrumentation.runOnMainSync {
+                observedActivity = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).filterIsInstance<MainActivity>().single()
+            }
+            fun onActivity(action: (MainActivity) -> Unit) = instrumentation.runOnMainSync {
+                check(!observedActivity.isDestroyed) { "Observed Activity was destroyed" }
+                action(observedActivity)
+            }
             val holdScreen = InstrumentationRegistry.getArguments().getString("keepScreenAwake") == "true"
             val holdHandler = Handler(Looper.getMainLooper())
             var holdActivity: MainActivity? = null
-            scenario.onActivity { holdActivity = it }
+            onActivity { holdActivity = it }
             val hold = object : Runnable {
                 override fun run() {
                     val activity = holdActivity
@@ -271,7 +281,7 @@ class AppBaselineTest {
             }
             if (holdScreen) holdHandler.post(hold)
             try {
-            waitFor(scenario) { !it.loading && !it.recoveryBlocked && it.boundLens == it.lens }
+            waitFor(observedActivity) { !it.loading && !it.recoveryBlocked && it.boundLens == it.lens }
             val usable = SystemClock.elapsedRealtime() - start
             lateinit var model: CaptureViewModel
             lateinit var owner: OwnerProbe
@@ -288,7 +298,7 @@ class AppBaselineTest {
                     saves.add(state.lastSaveMillis)
                 }
             }
-            scenario.onActivity {
+            onActivity {
                 model = ViewModelProvider(it)[CaptureViewModel::class.java]
                 owner = replace<ExecutorService>(model, "worker") { old -> OwnerProbe(old) } as OwnerProbe
                 main = replace<Handler>(model, "main") { ModelMainProbe() } as ModelMainProbe
@@ -298,7 +308,7 @@ class AppBaselineTest {
             Thread.sleep(3000) // App-idle comparison, no capture or browser.
             val idleOwner = owner.maxQueued.get()
             val idleMain = main.maxPending.get()
-            scenario.onActivity { activity ->
+            onActivity { activity ->
                 val foreground = WorkUiFixtures.field<Boolean>(activity, "activityForeground")
                 report(JSONObject().put("event", "capture-admission").put("activityForeground", foreground)
                     .put("lifecycle", activity.lifecycle.currentState.name).put("windowFocused", activity.hasWindowFocus())
@@ -308,8 +318,8 @@ class AppBaselineTest {
                 }
                 model.start(SamplingConfiguration.Adaptive(30, 15), split = SessionSplit.OFF)
             }
-            waitFor(scenario) { it.capturing && it.frames >= initialFrames + 3 }
-            scenario.onActivity { captureId = model.state.value!!.session!!.directory.name }
+            waitFor(observedActivity) { it.capturing && it.frames >= initialFrames + 3 }
+            onActivity { captureId = model.state.value!!.session!!.directory.name }
             Thread.sleep(12_000)
             report(JSONObject().put("event", "healthy-capture").put("syntheticSessions", size)
                 .put("requestGaps", summary(gaps)).put("saveLatency", summary(saves)))
@@ -325,7 +335,7 @@ class AppBaselineTest {
                 val drawn = CountDownLatch(1)
                 val focused = CountDownLatch(1)
                 val at = AtomicLong()
-                scenario.onActivity { activity ->
+                onActivity { activity ->
                     WorkUiFixtures.field<Button>(activity, button).performClick()
                     val root = WorkUiFixtures.field<android.view.View>(activity, field).rootView
                     currentRoot = root
@@ -356,7 +366,7 @@ class AppBaselineTest {
             fun backToFeedback(): Long {
                 val begin = SystemClock.elapsedRealtime()
                 val detached = CountDownLatch(1)
-                scenario.onActivity {
+                onActivity {
                     val root = checkNotNull(currentRoot)
                     if (!root.isAttachedToWindow) detached.countDown()
                     else root.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
@@ -383,11 +393,11 @@ class AppBaselineTest {
                 backToFeedback()
             }
             Thread.sleep(3000)
-            scenario.onActivity { model.stop("Disposable baseline paused; photos retained") }
-            waitFor(scenario) { !it.savingPhoto && !it.capturing }
+            onActivity { model.stop("Disposable baseline paused; photos retained") }
+            waitFor(observedActivity) { !it.savingPhoto && !it.capturing }
             val barrier = CountDownLatch(1); owner.execute { barrier.countDown() }; check(barrier.await(30, TimeUnit.SECONDS))
             var state: CaptureViewModel.State? = null
-            scenario.onActivity { state = model.state.value; model.state.removeObserver(observer) }
+            onActivity { state = model.state.value; model.state.removeObserver(observer) }
             val outcome = checkNotNull(state)
             val memory = Debug.MemoryInfo().also { Debug.getMemoryInfo(it) }
             val directory = outcome.session!!.directory
@@ -411,6 +421,8 @@ class AppBaselineTest {
                 .put("missedSlots", outcome.missedSlots).put("processPssKiB", memory.totalPss)
                 .put("sessionId", captureId).put("durationMillis", SystemClock.elapsedRealtime() - start)
                 .put("testWindowKeepScreenOn", holdScreen)
+                .put("measurementRevision", "direct-main-v1")
+                .put("nominalIntervalMillis", outcome.nominalIntervalMillis).put("samplingStage", outcome.thinningStage)
                 .put("limitations", "software shutter-request cadence, not hardware sensor timestamps; first-draw callback not GPU presentation/human UAT; test-only executor/handler wrappers after hydration"))
             val captures = strings(fixture.getJSONArray("captures")).toMutableSet().apply { add(checkNotNull(captureId)) }
             fixture.put("captures", JSONArray(captures.toList()))

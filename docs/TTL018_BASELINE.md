@@ -154,10 +154,15 @@ telemetry API or a second processing authority. No durable state machine or
 processing admission is replaced. Keep its fixture/source version with results.
 
 Full-app revision v1 used Android UI-idle waits. They can fail to return under
-continuous periodic rendering and cannot prove an input hang. Revision v2 uses
-bounded first-draw callbacks for opening and main feedback after Back, without
-requiring global UI idleness. Draw callbacks are not GPU/display-presentation
-measurements. Three opening samples/one Timeboxes sample are descriptive only,
+continuous periodic rendering and cannot prove an input hang. Revision v2 introduced bounded first-draw callbacks and main feedback after
+Back, but its original `ActivityScenario.onActivity` calls still waited for
+idleness internally (confirmed in the pinned AndroidX core 1.6.1 bytecode).
+Those old intervals include test-framework idle waiting, not just interaction
+latency. Measurement revision **direct-main-v1** retains the actual resumed
+Activity and dispatches timed actions with `Instrumentation.runOnMainSync`,
+without an idle prerequisite. ActivityScenario is used only for launch/close.
+Compare and label revisions separately; do not pool their latency percentiles.
+Draw callbacks are not GPU/display-presentation measurements. Three opening samples/one Timeboxes sample are descriptive only,
 not reliable population percentiles. By default the harness does not mount the known runaway original 10k Sessions
 surface during capture; record that omission explicitly rather than claiming it
 passed. After a separately authorized candidate update, `includeLargeBrowser=true`
@@ -178,7 +183,13 @@ and input readiness are distinct: wait for browser window focus before injecting
 Back, and wait for that exact window to detach before the next opening. A global
 UI-idle wait or a draw without settled focus must not be used to infer an app hang
 or route Back into the underlying Camera Activity. Never bypass keyguard or
-change security settings to make a measurement run.
+change security settings to make a measurement run. Optional explicit
+`keepScreenAwake=true` holds only the isolated test Activity's window awake while
+it remains started and keyguard is not showing. It does not unlock/wake/bypass a
+locked device, alter OS timeout/security settings or admit background capture;
+the callback is removed and the idle window flag restored in a finally block.
+Final records label this test-only condition and the actual sampling stage/
+nominal interval, which must be considered when comparing cadence.
 
 Perfetto app-filtered track events and SurfaceFlinger frame timelines can be
 recorded under separately authorized tracing scope. On devices without tracefs,

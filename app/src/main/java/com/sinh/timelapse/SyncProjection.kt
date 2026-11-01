@@ -8,7 +8,8 @@ internal object SyncProjection {
     fun fields(work: WorkSession) = json("title" to work.title, "type" to work.type,
         "description" to work.description, "expectedOutcome" to (work.outcome ?: ""))
     private fun moment(m: WorkMoment?) = m?.let { json("boot" to it.boot, "elapsed" to it.elapsed, "epoch" to it.epoch) }
-    fun observe(state: JSONObject, snapshot: WorkSnapshot, now: WorkMoment) {
+    fun observe(state: JSONObject, snapshot: WorkSnapshot, now: WorkMoment): Boolean {
+        var changed = false
         val sources = state.getJSONObject("sources")
         val links = snapshot.links(now)
         for (work in snapshot.records) {
@@ -20,24 +21,26 @@ internal object SyncProjection {
                     "id" to l.id, "workId" to l.workId, "recordingId" to l.recordingId, "spanId" to l.spanId,
                     "boot" to l.boot, "startElapsed" to l.startElapsed, "endElapsed" to l.endElapsed,
                     "startEpoch" to l.startEpoch, "endEpoch" to l.endEpoch, "unknownTail" to l.unknownTail, "open" to l.open) }))
-            append(state, sources, work.id, source, fields(work))
+            changed = append(state, sources, work.id, source, fields(work)) || changed
         }
         // Keep the last source-owned summary to mark deletion; never fabricate a deleted work record.
         for (id in snapshot.deletedIds) if (sources.has(id)) {
             val old = sources.getJSONObject(id)
             val source = JSONObject(old.getJSONObject("source").toString()).put("deleted", true)
-            append(state, sources, id, source, old.getJSONObject("initial"))
+            changed = append(state, sources, id, source, old.getJSONObject("initial")) || changed
         }
+        return changed
     }
-    private fun append(state: JSONObject, sources: JSONObject, id: String, source: JSONObject, initial: JSONObject) {
+    private fun append(state: JSONObject, sources: JSONObject, id: String, source: JSONObject, initial: JSONObject): Boolean {
         val previous = sources.optJSONObject(id)
-        if (previous?.getJSONObject("source")?.toString() == source.toString()) return
+        if (previous?.getJSONObject("source")?.toString() == source.toString()) return false
         check(previous?.getJSONObject("source")?.getBoolean("deleted") != true) { "Deleted source cannot be reused" }
         val sequence = Math.addExact(previous?.getLong("sequence") ?: 0, 1)
         val item = json("id" to id, "sequence" to sequence, "source" to source,
             "initial" to (previous?.getJSONObject("initial") ?: initial))
         SyncStore.enqueue(state, "/v1/source", JSONArray().put(item).toString())
         sources.put(id, item)
+        return true
     }
     fun patch(record: JSONObject, field: String, value: String, resolve: Boolean): String {
         SyncPolicy.validate(field, value)

@@ -37,7 +37,16 @@ internal class SyncCoordinator private constructor(private val app: Application)
             SyncJobService.schedule(app, allowed)
         } }
         WorkSessionCoordinator.get(app).observeForSync { snapshot, now ->
-            worker.execute { safely { store.update { SyncProjection.observe(it, snapshot, now) }; publish() } }
+            worker.execute { safely {
+                val next = store.load() // Retain path/identity/external-change validation even on no-op observations.
+                if (SyncProjection.observe(next, snapshot, now)) {
+                    store.commit(next); publish()
+                } else {
+                    // Nothing changed for UI either. Still detect external bytes/path changes,
+                    // but don't clone/publish thousands of unchanged pending requests again.
+                    store.validateUnchanged()
+                }
+            } }
         }
     }
     private fun safely(operation: () -> Unit) {
