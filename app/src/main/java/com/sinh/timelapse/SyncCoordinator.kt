@@ -30,6 +30,7 @@ internal class SyncCoordinator private constructor(private val app: Application)
     private var busy = false
     private var mediaOwnerReady = false
     private var associationHints: String? = null
+    private var sourceObservation: WorkSourceObservation? = null
     private var message = "Disabled; local camera and timers work offline"
     init {
         worker.execute { safely {
@@ -38,6 +39,11 @@ internal class SyncCoordinator private constructor(private val app: Application)
         } }
         WorkSessionCoordinator.get(app).observeForSync { snapshot, now ->
             worker.execute { safely {
+                val observation = WorkSourceObservation.of(snapshot, now)
+                if (sourceObservation == observation) {
+                    store.validateUnchanged() // No JSON projection/clone; still detect external bytes and path changes.
+                    return@safely
+                }
                 val next = store.load() // Retain path/identity/external-change validation even on no-op observations.
                 if (SyncProjection.observe(next, snapshot, now)) {
                     store.commit(next); publish()
@@ -46,6 +52,7 @@ internal class SyncCoordinator private constructor(private val app: Application)
                     // but don't clone/publish thousands of unchanged pending requests again.
                     store.validateUnchanged()
                 }
+                sourceObservation = observation // Never cache a failed validation, commit or publication.
             } }
         }
     }

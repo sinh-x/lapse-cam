@@ -167,7 +167,14 @@ not reliable population percentiles. By default the harness does not mount the k
 surface during capture; record that omission explicitly rather than claiming it
 passed. After a separately authorized candidate update, `includeLargeBrowser=true`
 can lift that skip. `openingSamples=30` collects the minimum opening sample count
-used by the frozen budget plan; raw arrays are retained with aggregate results.
+used by the frozen budget plan; raw arrays and dispatch/click/draw timing splits
+are retained with aggregate results. Use `healthySeconds=30` for the required
+same-fixture healthy-capture comparison (the default 12s is a smoke sample only).
+The run records healthy/browsing durations, committed-photo counts/rate ratio
+and separately labelled model-reported missed slots. The latter is not a
+hardware-sensor missed-frame counter. A supported blackout reveal action is
+performed before opening a browser if needed, and capture/cover state is checked
+through each browser/Back transition.
 Do not retroactively treat earlier three-sample runs as 30-sample percentiles.
 
 Camera metrics are actual committed JPEG counts/dimensions plus **software

@@ -319,10 +319,34 @@ class AppBaselineTest {
                 model.start(SamplingConfiguration.Adaptive(30, 15), split = SessionSplit.OFF)
             }
             waitFor(observedActivity) { it.capturing && it.frames >= initialFrames + 3 }
-            onActivity { captureId = model.state.value!!.session!!.directory.name }
-            Thread.sleep(12_000)
+            var healthyFramesStart = 0
+            var healthyStartedAt = 0L
+            var healthyGapStart = 0
+            var healthySaveStart = 0
+            var healthyMissedStart = 0L
+            var healthyMissedEnd = 0L
+            onActivity {
+                captureId = model.state.value!!.session!!.directory.name
+                healthyFramesStart = model.state.value!!.frames; healthyStartedAt = SystemClock.elapsedRealtime()
+                healthyGapStart = gaps.size; healthySaveStart = saves.size
+                healthyMissedStart = model.state.value!!.missedSlots
+            }
+            val healthySeconds = InstrumentationRegistry.getArguments().getString("healthySeconds", "12").toInt().also { require(it in 12..60) }
+            Thread.sleep(healthySeconds * 1000L)
+            var healthyFramesEnd = 0
+            var healthyEndedAt = 0L
+            var healthyGaps = emptyList<Long>()
+            var healthySaves = emptyList<Long>()
+            onActivity {
+                healthyFramesEnd = model.state.value!!.frames; healthyEndedAt = SystemClock.elapsedRealtime()
+                healthyMissedEnd = model.state.value!!.missedSlots
+                healthyGaps = gaps.drop(healthyGapStart); healthySaves = saves.drop(healthySaveStart)
+            }
+            val healthyDuration = healthyEndedAt - healthyStartedAt
+            val healthyPhotos = healthyFramesEnd - healthyFramesStart
             report(JSONObject().put("event", "healthy-capture").put("syntheticSessions", size)
-                .put("requestGaps", summary(gaps)).put("saveLatency", summary(saves)))
+                .put("durationMillis", healthyDuration).put("committedPhotos", healthyPhotos)
+                .put("requestGaps", summary(healthyGaps)).put("saveLatency", summary(healthySaves)))
             val sessionOpens = mutableListOf<Long>()
             val sessionBacks = mutableListOf<Long>()
             val workOpens = mutableListOf<Long>()
@@ -330,13 +354,25 @@ class AppBaselineTest {
             val includeLarge = InstrumentationRegistry.getArguments().getString("includeLargeBrowser") == "true"
             val samples = InstrumentationRegistry.getArguments().getString("openingSamples", "3").toInt().also { require(it in 1..30) }
             var currentRoot: android.view.View? = null
+            val openTimings = JSONArray()
             fun openToDraw(button: String, field: String): Long {
+                onActivity { activity ->
+                    val cover = WorkUiFixtures.field<android.view.View>(activity, "blackoutCover")
+                    if (cover.visibility == android.view.View.VISIBLE) cover.performClick() // Supported reveal action, not a capture control.
+                    check(model.state.value!!.capturing) { "Capture paused before browser navigation" }
+                }
                 val begin = SystemClock.elapsedRealtime()
                 val drawn = CountDownLatch(1)
                 val focused = CountDownLatch(1)
                 val at = AtomicLong()
+                var dispatchedAt = 0L
+                var returnedAt = 0L
                 onActivity { activity ->
+                    dispatchedAt = SystemClock.elapsedRealtime()
                     WorkUiFixtures.field<Button>(activity, button).performClick()
+                    returnedAt = SystemClock.elapsedRealtime()
+                    check(WorkUiFixtures.field<android.view.View>(activity, "blackoutCover").visibility != android.view.View.VISIBLE)
+                    check(model.state.value!!.capturing) { "Browser navigation paused capture" }
                     val root = WorkUiFixtures.field<android.view.View>(activity, field).rootView
                     currentRoot = root
                     val focusListener = object : android.view.ViewTreeObserver.OnWindowFocusChangeListener {
@@ -361,6 +397,8 @@ class AppBaselineTest {
                 }
                 check(drawn.await(60, TimeUnit.SECONDS)) { "First draw timeout; no UI-idle inference" }
                 check(focused.await(60, TimeUnit.SECONDS)) { "Window focus timeout; no Back injection into underlying Camera" }
+                openTimings.put(JSONObject().put("surface", button).put("dispatchWaitMillis", dispatchedAt - begin)
+                    .put("clickExecutionMillis", returnedAt - dispatchedAt).put("postActionDrawMillis", at.get() - returnedAt))
                 return at.get() - begin
             }
             fun backToFeedback(): Long {
@@ -381,7 +419,12 @@ class AppBaselineTest {
                 val feedback = CountDownLatch(1)
                 Handler(Looper.getMainLooper()).post { feedback.countDown() }
                 check(feedback.await(60, TimeUnit.SECONDS))
-                return SystemClock.elapsedRealtime() - begin
+                val elapsed = SystemClock.elapsedRealtime() - begin
+                onActivity { activity ->
+                    check(WorkUiFixtures.field<android.view.View>(activity, "blackoutCover").visibility != android.view.View.VISIBLE)
+                    check(model.state.value!!.capturing) { "Returning to Camera paused capture" }
+                }
+                return elapsed
             }
             if (size <= 1000 || includeLarge) repeat(samples) {
                 sessionOpens.add(openToDraw("sessionsButton", "sessionsView"))
@@ -399,6 +442,10 @@ class AppBaselineTest {
             var state: CaptureViewModel.State? = null
             onActivity { state = model.state.value; model.state.removeObserver(observer) }
             val outcome = checkNotNull(state)
+            val browsingDuration = SystemClock.elapsedRealtime() - healthyEndedAt
+            val healthyRate = if (healthyDuration > 0) healthyPhotos * 1000.0 / healthyDuration else 0.0
+            val browsingPhotos = outcome.frames - healthyFramesEnd
+            val browsingRate = if (browsingDuration > 0) browsingPhotos * 1000.0 / browsingDuration else 0.0
             val memory = Debug.MemoryInfo().also { Debug.getMemoryInfo(it) }
             val directory = outcome.session!!.directory
             val jpegCount = directory.listFiles()!!.count { it.name.endsWith(".jpg") && it.name.startsWith("frame_") }
@@ -409,7 +456,8 @@ class AppBaselineTest {
                 .put("cameraUsableMillis", usable).put("sessionOpenToFirstDraw", summary(sessionOpens))
                 .put("sessionBackToMainFeedback", summary(sessionBacks)).put("timeboxOpenToFirstDraw", summary(workOpens))
                 .put("sessionOpenSamplesMillis", JSONArray(sessionOpens)).put("sessionBackSamplesMillis", JSONArray(sessionBacks))
-                .put("timeboxOpenSamplesMillis", JSONArray(workOpens)).put("requestGapSamplesMillis", JSONArray(gaps))
+                .put("timeboxOpenSamplesMillis", JSONArray(workOpens)).put("openTimings", openTimings)
+                .put("requestGapSamplesMillis", JSONArray(gaps))
                 .put("saveLatencySamplesMillis", JSONArray(saves))
                 .put("sessionOpenNotRun", if (size > 1000 && !includeLarge) "10k eager component already exceeded safe observation window" else "")
                 .put("idleOwnerMaxQueued", idleOwner).put("idleModelMainMaxPending", idleMain)
@@ -423,6 +471,13 @@ class AppBaselineTest {
                 .put("testWindowKeepScreenOn", holdScreen)
                 .put("measurementRevision", "direct-main-v1")
                 .put("nominalIntervalMillis", outcome.nominalIntervalMillis).put("samplingStage", outcome.thinningStage)
+                .put("healthyDurationMillis", healthyDuration).put("healthyCommittedPhotos", healthyPhotos)
+                .put("healthyModelMissedSlots", healthyMissedEnd - healthyMissedStart)
+                .put("browsingModelMissedSlots", outcome.missedSlots - healthyMissedEnd)
+                .put("healthyRequestGaps", summary(healthyGaps)).put("healthySaveLatency", summary(healthySaves))
+                .put("browsingDurationMillis", browsingDuration).put("browsingCommittedPhotos", browsingPhotos)
+                .put("photoRateRatio", if (healthyRate > 0) browsingRate / healthyRate else 0.0)
+                .put("cadenceComparable", healthyRate > 0 && outcome.nominalIntervalMillis == 500L && outcome.thinningStage == 0L)
                 .put("limitations", "software shutter-request cadence, not hardware sensor timestamps; first-draw callback not GPU presentation/human UAT; test-only executor/handler wrappers after hydration"))
             val captures = strings(fixture.getJSONArray("captures")).toMutableSet().apply { add(checkNotNull(captureId)) }
             fixture.put("captures", JSONArray(captures.toList()))

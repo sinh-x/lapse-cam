@@ -109,7 +109,12 @@ actually added a source mutation; identical observations avoid rewriting the
 whole sync file or cloning/publishing an unchanged pending-request backlog to
 the UI. Strict store reads and a final byte/path/identity validation still run
 on no-ops; changed live links, tombstones and source transitions still enqueue,
-commit and publish in order.
+commit and publish in order. A single immutable source-input fingerprint (saved
+records, tombstones and exact derived capture links) avoids re-projecting an
+identical observation; unlinked capture checkpoints and drafts add no source
+mutation. Live-link advances and metadata/deletion changes invalidate it. This
+fingerprint is recorded only after successful validation/commit/publication;
+external byte/path changes are still checked on every no-op.
 
 ## Validation boundaries
 
