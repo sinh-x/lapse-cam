@@ -112,6 +112,69 @@ identifies that confounder. The main-handler probe is observed without a running
 capture or full-app history. This cannot establish real capture cadence or queue
 backpressure under a production progress burst.
 
+## Full-application foreground baseline
+
+`AppBaselineTest` uses the same opt-in and isolated-package guards. Its
+`seedMetadata` method runs in a separate instrumentation process **before**
+launching any application owner. Grow the synthetic fixture monotonically:
+100 → 1000 → 10000 via `historySize`. It constructs valid saved metadata, a
+sparse 10% historical attention fixture, no synthetic Today sessions, and an even
+mix of unstarted/older-started Timeboxes. It publishes one index rather than
+manufacturing thousands of videos. Only the initial empty isolated store or its
+exact recorded fixture identities/index hash are accepted. Previously captured
+fixture JPEGs and recording spans are preserved. Never invoke the seeder while
+an app Activity/owner is running. The canonical data path is required for the
+existing atomic writer; Android's `/data/user/0` alias is not passed as authority.
+
+A deliberately narrow `adoptInterrupted=true` path exists for separately
+approved reconciliation of the original interrupted **100-directory**, empty
+seed. It requires no index/marker/Timeboxes history, exactly 100 matching empty
+Adaptive metadata directories, exact expected sidecar names, and zero progress
+or photos. It is not ordinary recovery, automatic retry, general record repair,
+or permission to adopt unknown files. Any interrupted larger seed must be
+retained and explicitly reconciled, not replayed with this flag.
+
+After seeding, explicitly select `foregroundCaptureAndBrowse` in a new process.
+It requires a separately authorized CAMERA grant for the isolated package and
+an unlocked selected Pixel pointed at non-sensitive subject matter. It launches
+the actual `MainActivity`, waits at most 180s for usable model/camera state,
+collects idle/healthy foreground Adaptive 500ms capture, browses the actual
+Sessions/Timeboxes surfaces, pauses and retains the JPEGs. Capture uses split
+Off: no automatic export or source cleanup of these camera samples is admitted.
+The generated-media fixture above owns its own independent disposable sources.
+
+The full-app observer decorates the model's executor and Handler **in the test
+only, after hydration**. Queued-owner depth/task durations and immediate model
+message depth/latency are attributed to that model, not Work/sync or the entire
+Android message queue. Future cadence/tick timers are excluded from immediate
+message depth. This instrumentation adds overhead and is not a production
+telemetry API or a second processing authority. No durable state machine or
+processing admission is replaced. Keep its fixture/source version with results.
+
+Full-app revision v1 used Android UI-idle waits. They can fail to return under
+continuous periodic rendering and cannot prove an input hang. Revision v2 uses
+bounded first-draw callbacks for opening and main feedback after Back, without
+requiring global UI idleness. Draw callbacks are not GPU/display-presentation
+measurements. Three opening samples/one Timeboxes sample are descriptive only,
+not reliable population percentiles. The harness deliberately does not mount the
+known runaway original 10k Sessions surface during capture; record that omission
+explicitly rather than claiming it passed.
+
+Camera metrics are actual committed JPEG counts/dimensions plus **software
+shutter-request** gaps/save times. They are not hardware sensor timestamps.
+Previously interrupted runs can leave a recovered unknown tail: retain that
+state instead of resetting it for a cleaner result. If the usable-state wait
+fails, record that predicate failure and do not infer whether hydration,
+recovery, permissions or camera binding was the exact blocker without evidence.
+
+Perfetto app-filtered track events and SurfaceFlinger frame timelines can be
+recorded under separately authorized tracing scope. On devices without tracefs,
+`atrace` may be unavailable; do not change security settings to enable it.
+Perfetto config access may require `/data/misc/perfetto-configs` rather than
+`/data/local/tmp`. Bound trace duration, preserve failed attempts, retrieve only
+the exact newly allocated trace, and stop only the recording session you started.
+Trace creation/file size is not trace analysis or a confirmed root cause.
+
 ## Mandatory performance checkpoint
 
 Before performance tuning, complete the approved baseline matrix: repeated
