@@ -2,6 +2,9 @@ package com.sinh.timelapse
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.os.Bundle
+import android.view.ViewGroup
+import java.time.LocalDate
 import android.graphics.Color
 import android.text.Editable
 import android.text.InputType
@@ -21,7 +24,7 @@ internal class WorkSessionsView(
     private val requestNotifications: () -> Unit, private val requestAlarms: () -> Unit,
     initialId: String? = null,
 ) : LinearLayout(activity) {
-    private val content = LinearLayout(activity).apply { orientation = VERTICAL }
+    private var content = LinearLayout(activity).apply { orientation = VERTICAL }
     private val message = text("")
     private var page = if (initialId == null) "list" else "detail"
     private var formGeneration = 0L
@@ -54,8 +57,27 @@ internal class WorkSessionsView(
     private var saving = false
     private var current = text("")
     private var detail = text("")
-    private val rows = linkedMapOf<String, Button>()
-    private var list: LinearLayout? = null
+    private var virtualList: ListView? = null
+    private var formScroll: ScrollView? = null
+    private val expandedDates = linkedSetOf<String>()
+    private var listPosition = 0 to 0
+    private var dayKey = ""
+    private data class DateRow(val key: String, val label: String, val action: () -> Unit)
+    private var dateRows = emptyList<DateRow>()
+    private val rowIds = mutableMapOf<String, Long>()
+    private var nextRowId = 0L
+    private val dateAdapter = object : BaseAdapter() {
+        override fun getCount() = dateRows.size
+        override fun getItem(position: Int) = dateRows[position]
+        override fun getItemId(position: Int) = rowIds.getOrPut(dateRows[position].key) { nextRowId++ }
+        override fun hasStableIds() = true
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val row = (convertView as? Button) ?: button("") {}
+            val value = dateRows[position]
+            if (row.text.toString() != value.label) row.text = value.label
+            row.contentDescription = value.label; row.setOnClickListener { value.action() }; return row
+        }
+    }
     private var draft: WorkDraft? = null
     private var titleField: EditText? = null
     private var durationField: EditText? = null
@@ -74,7 +96,6 @@ internal class WorkSessionsView(
     private var linksPanel: LinearLayout? = null
     init {
         orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(Color.rgb(16, 25, 22))
-        addView(ScrollView(activity).apply { isFillViewport = true; addView(content) }, LayoutParams(-1, 0, 1f))
         buildPage()
     }
     fun back(): Boolean {
@@ -126,17 +147,49 @@ internal class WorkSessionsView(
     }
     private fun chooseSort() {
         if (disposed || choicePrompt != null) return
-        choicePrompt = AlertDialog.Builder(activity).setTitle("Sort timeboxes")
-            .setSingleChoiceItems(WorkSort.entries.map { it.label }.toTypedArray(), sort.ordinal) { dialog, index ->
+        choicePrompt = AlertDialog.Builder(activity).setTitle("Sort within each portion/date")
+            .setSingleChoiceItems(arrayOf("Newest", "Oldest", "Activity type"), sort.ordinal) { dialog, index ->
                 if (!disposed) { sort = WorkSort.entries[index]; owner.state.value?.let(::render) }
                 choicePrompt = null; dialog.dismiss()
             }.setNegativeButton("Cancel", null).create().also { dialog ->
                 dialog.setOnDismissListener { if (choicePrompt === dialog) choicePrompt = null }; dialog.show()
             }
     }
+    private fun rememberBrowser() {
+        virtualList?.let { listPosition = it.firstVisiblePosition to (it.getChildAt(0)?.top ?: 0) }
+    }
+    fun refreshDates() {
+        val key = "${LocalDate.now()}:${ZoneId.systemDefault().id}"
+        if (key != dayKey) { dayKey = key; owner.state.value?.let(::render) }
+    }
+    fun saveBrowserState(): Bundle {
+        rememberBrowser()
+        return Bundle().apply {
+            putStringArrayList("expanded", ArrayList(expandedDates)); putInt("position", listPosition.first)
+            putInt("offset", listPosition.second); putInt("detailScroll", formScroll?.scrollY ?: 0)
+        }
+    }
+    fun restoreBrowserState(state: Bundle) {
+        expandedDates.clear(); expandedDates.addAll(state.getStringArrayList("expanded").orEmpty())
+        listPosition = state.getInt("position") to state.getInt("offset")
+        owner.state.value?.let(::render)
+        virtualList?.setSelectionFromTop(listPosition.first, listPosition.second)
+        formScroll?.post { formScroll?.scrollTo(0, state.getInt("detailScroll")) }
+    }
     private fun buildPage() {
+        rememberBrowser()
+        content.removeAllViews()
+        removeAllViews(); virtualList = null; formScroll = null
+        content = LinearLayout(activity).apply { orientation = VERTICAL }
+        if (page == "list") {
+            virtualList = ListView(activity).apply { addHeaderView(content, null, false); adapter = dateAdapter }
+            addView(virtualList, LayoutParams(-1, 0, 1f))
+        } else {
+            formScroll = ScrollView(activity).apply { isFillViewport = true; addView(content) }
+            addView(formScroll, LayoutParams(-1, 0, 1f))
+        }
         formGeneration++
-        content.removeAllViews(); content.addView(message); rows.clear(); actionsKey = ""; linksKey = null; list = null
+        content.removeAllViews(); content.addView(message); actionsKey = ""; linksKey = null
         newButton = null; currentActions = null; archiveFilter = null; emptyList = null; typeFilterButton = null; sortButton = null
         reminderToggle = null; reminderPanel = null; reminderStatus = null; notificationButton = null; timingButton = null
         titleField = null; outcomeField = null; descriptionField = null; durationField = null; durationShortcuts = null; saveButton = null
@@ -176,11 +229,12 @@ internal class WorkSessionsView(
                 typeFilterButton = button("") { chooseTypeFilter() }; content.addView(typeFilterButton)
                 sortButton = button("") { chooseSort() }; content.addView(sortButton)
                 emptyList = text(""); content.addView(emptyList)
-                list = LinearLayout(activity).apply { orientation = VERTICAL }; content.addView(list)
+                dateRows = emptyList(); dateAdapter.notifyDataSetChanged()
             }
         }
         onPageChanged?.invoke()
         owner.state.value?.let(::render)
+        virtualList?.setSelectionFromTop(listPosition.first, listPosition.second)
     }
     private fun newDraft(copy: WorkSession? = null) {
         if (copy != null && (owner.editorDraft != null || owner.state.value?.snapshot?.draft != null)) {
@@ -311,11 +365,11 @@ internal class WorkSessionsView(
                 reminderPanel?.visibility = if (!showArchived && reminderExpanded) VISIBLE else GONE
                 archiveFilter?.text = if (showArchived) "Back to active timeboxes" else "Show archived timeboxes (${state.snapshot.records.count { it.archived }})"
                 typeFilterButton?.text = "Activity type: ${activityFilter?.let { WorkType.fromKey(it).label } ?: "All"}"
-                sortButton?.text = "Sort: ${sort.label}"
+                sortButton?.text = "Within portion/date: ${when (sort) { WorkSort.NEWEST -> "Newest"; WorkSort.OLDEST -> "Oldest"; WorkSort.TYPE -> "Activity type" }}"
                 val partition = state.snapshot.records.filter { it.archived == showArchived }
-                val displayed = WorkListPolicy.project(state.snapshot.records, showArchived, activityFilter, sort)
-                val ids = displayed.map { it.id }.toSet()
-                rows.keys.filter { it !in ids }.toList().forEach { id -> list!!.removeView(rows.remove(id)) }
+                val projection = TimeboxHistory.project(state.snapshot.records, showArchived, activityFilter, sort,
+                    LocalDate.now(), ZoneId.systemDefault())
+                val displayed = projection.unstarted + projection.today + projection.dates.flatMap { it.items }
                 emptyList?.apply {
                     text = if (partition.isNotEmpty()) "No timeboxes match this Activity type."
                         else if (showArchived) "No archived timeboxes." else "No saved timeboxes yet."
@@ -327,15 +381,25 @@ internal class WorkSessionsView(
                 notificationButton?.apply { text = access?.notificationAction ?: "Allow end notification"; isEnabled = access?.notificationsAllowed != true }
                 timingButton?.apply { text = access?.timingAction ?: "Allow background timing"; isEnabled = access?.backgroundTiming != true }
                 newButton?.apply { text = if (owner.editorDraft != null || state.snapshot.draft != null) "Resume draft" else "New timebox"; isEnabled = state.loaded }
-                displayed.forEachIndexed { index, work ->
-                    val row = rows.getOrPut(work.id) { button("") { selected = work.id; page = "detail"; buildPage() } }
-                    val label = "${work.title}\n${WorkType.fromKey(work.type).label} · ${work.state.name.lowercase()} · ${dateTime(work.createdAt)}\n${work.id}"
-                    if (row.text.toString() != label) row.text = label
-                    if (list!!.indexOfChild(row) != index) {
-                        val focused = row.hasFocus()
-                        list!!.removeView(row); list!!.addView(row, index)
-                        if (focused) row.requestFocus()
-                    }
+                val projected = mutableListOf<DateRow>()
+                fun append(values: List<WorkSession>) { values.forEach { work ->
+                    val date = work.start?.let { "Started ${dateTime(it.epoch)}" }
+                        ?: if (work.state == WorkState.PLANNED) "Unstarted" else "Start unavailable"
+                    projected.add(DateRow(work.id, "${work.title}\n${WorkType.fromKey(work.type).label} · ${work.state.name.lowercase()} · $date\n${work.id}") {
+                        selected = work.id; page = "detail"; buildPage()
+                    })
+                } }
+                append(projection.unstarted); append(projection.today)
+                projection.dates.forEach { day ->
+                    val key = day.date.toString(); val expanded = key in expandedDates
+                    projected.add(DateRow("date:$key", "$key (${day.items.size} timeboxes) · ${if (expanded) "expanded" else "collapsed"}") {
+                        rememberBrowser(); if (!expandedDates.remove(key)) expandedDates.add(key)
+                        owner.state.value?.let(::render)
+                    })
+                    if (expanded) append(day.items)
+                }
+                if (dateRows.map { it.key to it.label } != projected.map { it.key to it.label }) {
+                    dateRows = projected; dateAdapter.notifyDataSetChanged()
                 }
             }
             "detail" -> {

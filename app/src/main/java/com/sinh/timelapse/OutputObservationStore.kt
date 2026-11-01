@@ -8,8 +8,10 @@ import java.io.File
 internal class OutputObservationStore(files: File) {
     private val target = File(files.canonicalFile, "output-observations.json")
     private var loaded = false
+    private var blocked: Exception? = null
     private var values = linkedMapOf<String, OutputObservation>()
     fun load() {
+        blocked?.let { throw IllegalStateException("Output evidence write requires reload; bytes retained", it) }
         if (loaded) return
         val next = linkedMapOf<String, OutputObservation>()
         if (target.exists() || File(target.path + ".bak").exists()) {
@@ -46,7 +48,8 @@ internal class OutputObservationStore(files: File) {
             .put("availability", value.availability.name).put("checkedAt", value.checkedAt)
             .put("diagnostic", value.diagnostic).put("lastAttemptAt", value.lastAttemptAt)
             .put("lastAttemptDiagnostic", value.lastAttemptDiagnostic)) }
-        SessionRepository.atomicJson(target, JSONObject().put("version", 1).put("observations", array))
+        try { SessionRepository.atomicJson(target, JSONObject().put("version", 1).put("observations", array)) }
+        catch (error: Exception) { blocked = error; throw error }
         values = next
         return true
     }

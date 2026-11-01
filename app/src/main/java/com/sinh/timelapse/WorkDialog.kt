@@ -54,7 +54,7 @@ internal class WorkDialog(activity: Activity, private val workView: WorkSessions
         setOnDismissListener { hideKeyboard(); workView.dispose(); closed() }
     }
     private fun updateHeading() {
-        heading.text = when (workView.savedPage()) { "setup" -> "New timebox"; "edit" -> "Edit timebox"; "detail" -> "Timebox details"; else -> if (workView.isShowingArchived()) "Archived timeboxes" else "Work" }
+        heading.text = when (workView.savedPage()) { "setup" -> "New timebox"; "edit" -> "Edit timebox"; "detail" -> "Timebox details"; else -> if (workView.isShowingArchived()) "Archived timeboxes" else "Timeboxes" }
     }
     private fun navigateBack() {
         hideKeyboard()
@@ -76,7 +76,7 @@ internal class WorkDialog(activity: Activity, private val workView: WorkSessions
     }
     override fun show() {
         super.show()
-        window?.setLayout(-1, (context.resources.displayMetrics.heightPixels * 0.94).toInt())
+        window?.setLayout(-1, -1)
         window?.decorView?.requestApplyInsets()
     }
     private fun dp(value: Int) = (value * context.resources.displayMetrics.density).toInt()

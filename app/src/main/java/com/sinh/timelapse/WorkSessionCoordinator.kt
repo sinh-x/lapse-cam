@@ -15,7 +15,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     private val remindersEnabled: Boolean = true, reminders: TimeboxReminders? = null,
     private val clock: (() -> WorkMoment)? = null) {
     data class State(val snapshot: WorkSnapshot = WorkSnapshot(), val loaded: Boolean = false,
-        val message: String = "Loading work…", val error: String? = null, val reminder: String = "",
+        val message: String = "Loading Timeboxes…", val error: String? = null, val reminder: String = "",
         val reminderAccess: TimeboxReminderAccess? = null, val editRevisions: Map<String, Long> = emptyMap())
     internal val attention = DisplayAttention()
     private val worker = Executors.newSingleThreadExecutor()
@@ -209,7 +209,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
                         expired.forEach { scheduler.notifyEnded(it.id) }
                     }
                 } catch (error: Exception) {
-                    reminder = "Background reminder unavailable: ${error.message}. Work is saved; reopen to reconcile expiry."
+                    reminder = "Background reminder unavailable: ${error.message}. Timebox is saved; reopen to reconcile expiry."
                     scheduled = null
                 }
                 val revisions = store.revisions()
@@ -233,9 +233,9 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
                 main.post {
                     failed()
                     val current = state.value ?: State()
-                    attention.failure(attentionKey, "Work error: ${error.message}. Retained data; camera remains independent.")
+                    attention.failure(attentionKey, "Timebox error: ${error.message}. Retained data; camera remains independent.")
                     mutableState.value = current.copy(snapshot = recovered ?: current.snapshot, editRevisions = revisions,
-                        error = "Work error: ${error.message}. Retained data; camera remains independent.", message = "Not saved")
+                        error = "Timebox error: ${error.message}. Retained data; camera remains independent.", message = "Not saved")
                     finished()
                 }
             }

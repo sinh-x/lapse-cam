@@ -82,6 +82,12 @@ class CaptureViewModel @JvmOverloads constructor(
     private var reviewRunning: String? = null
     private var reviewProgress = 0
     private val manualReviews = linkedMapOf<String, SessionReview>()
+    private val outputEvidence by lazy { OutputObservationStore(filesDirectory) }
+    val outputReviewError = MutableLiveData<String?>(null)
+    private data class ReadRequest(val id: String, val token: String, val callback: ((Uri?) -> Unit)? = null)
+    private var readInFlight: Pair<ReadRequest, SessionOutputIdentity>? = null
+    private var pendingRead: ReadRequest? = null
+    private val readEntries = linkedMapOf<String, String>()
     private val store by lazy { SessionStore(filesDirectory, epochMillis = epochMillis) }
     private val repository by lazy { SessionRepository(filesDirectory, store, epochMillis) }
     private var closeGate = SessionCloseGate()
@@ -567,14 +573,22 @@ class CaptureViewModel @JvmOverloads constructor(
                 record.error, record.output, (record.phase == SessionPhase.NEEDS_ATTENTION && record.cycle.exhausted) ||
                     (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()),
                 !record.busy && record.phase !in setOf(SessionPhase.DELETED, SessionPhase.FINISHED) && !record.cycle.reserved,
-                verifiedOperation = record.operation.takeIf { record.receipt != null && record.output != null })
+                verifiedOperation = record.operation.takeIf { record.receipt != null && record.output != null },
+                processing = SessionProcessingProjection.project(record, null, foreground))
         }
+        val evidenceError = runCatching { outputEvidence.load() }.exceptionOrNull()?.let {
+            "Output review unavailable: ${it.message}. Existing evidence retained; attention count may be incomplete."
+        }
+        val decorated = reviews.map { review -> review.copy(outputObservation =
+            if (evidenceError == null) outputEvidence.observation(review.outputIdentity) else review.outputObservation) }
         post {
+            if (outputReviewError.value != evidenceError) outputReviewError.value = evidenceError
+            if (evidenceError != null) attention.failure("output-review", evidenceError) else attention.resolve("output-review")
             val unsafe = SessionAttentionPolicy.observe(attention, records)
             // Preserve the existing observer/sync workload on ordinary queue progress.
             // The Sessions publication below delivers new attention without a second State emission.
             if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
-            mutableSessions.value = reviews.map { review ->
+            mutableSessions.value = decorated.map { review ->
                 if (review.id == current.session?.directory?.name) review.copy(
                     status = if (current.capturing) "Active" else if (current.switching) "Closing" else "Paused",
                     activeMillis = current.activeMillis ?: review.activeMillis,
@@ -653,15 +667,67 @@ class CaptureViewModel @JvmOverloads constructor(
         }
     }
 
+    fun recheckVideo(id: String, entryToken: String) {
+        worker.execute { admitRead(ReadRequest(id, entryToken)) }
+    }
     fun openSessionVideo(id: String, result: (Uri?) -> Unit) {
-        worker.execute {
-            val output = repository.records().firstOrNull { it.id == id }?.output ?: manualReviews[id]?.output
-            val uri = runCatching {
-                val exact = Uri.parse(checkNotNull(output))
-                checkNotNull(getApplication<Application>().contentResolver.openAssetFileDescriptor(exact, "r")).use { }
-                exact
-            }.getOrNull()
-            post { result(uri) }
+        worker.execute { admitRead(ReadRequest(id, java.util.UUID.randomUUID().toString(), result)) }
+    }
+    private fun outputIdentity(id: String): SessionOutputIdentity? {
+        val record = repository.records().firstOrNull { it.id == id }
+        return if (record != null) record.output?.let { SessionOutputIdentity(id, it, record.operation.takeIf { record.receipt != null }) }
+            else manualReviews[id]?.outputIdentity
+    }
+    /** One admitted lightweight read plus one latest pending detail/Open request; no history scan. */
+    private fun admitRead(request: ReadRequest) {
+        if (closed) return
+        if (readEntries[request.id] == request.token && request.callback == null) return
+        val identity = outputIdentity(request.id)
+        if (identity == null) { request.callback?.let { post { it(null) } }; return }
+        readEntries.remove(request.id); readEntries[request.id] = request.token
+        while (readEntries.size > 64) readEntries.remove(readEntries.keys.first())
+        val active = readInFlight
+        if (active != null) {
+            if (active.second == identity) {
+                if (request.callback != null) readInFlight = request to identity
+            } else {
+                pendingRead?.callback?.let { post { it(null) } }
+                pendingRead = request
+            }
+            return
+        }
+        readInFlight = request to identity
+        mediaWorker.execute {
+            val at = epochMillis().coerceAtLeast(0)
+            val observation = try {
+                checkNotNull(getApplication<Application>().contentResolver.openAssetFileDescriptor(Uri.parse(identity.uri), "r")).use { }
+                OutputObservation(identity, OutputAvailability.READABLE, at)
+            } catch (error: SecurityException) {
+                OutputObservation(identity, OutputAvailability.PERMISSION_BLOCKED, at, error.message ?: "Read permission denied")
+            } catch (error: java.io.FileNotFoundException) {
+                val missing = runCatching {
+                    getApplication<Application>().contentResolver.query(Uri.parse(identity.uri), arrayOf("_id"), null, null, null)?.use { it.count == 0 } == true
+                }.getOrDefault(false)
+                OutputObservation(identity, if (missing) OutputAvailability.MISSING else OutputAvailability.UNREADABLE,
+                    at, error.message ?: "Expected video cannot be read")
+            } catch (error: java.io.IOException) {
+                OutputObservation(identity, OutputAvailability.UNREADABLE, at, error.message ?: "Read failed")
+            } catch (error: Exception) {
+                OutputObservation(identity, OutputAvailability.UNKNOWN, at, error.message ?: "Availability check inconclusive")
+            }
+            worker.execute {
+                val callback = readInFlight?.first?.callback
+                readInFlight = null
+                val current = outputIdentity(identity.sessionId)
+                runCatching { outputEvidence.record(observation, current) }.onFailure { error -> post {
+                    val detail = "Output review unavailable: ${error.message}. Evidence retained; count may be incomplete."
+                    outputReviewError.value = detail; attention.failure("output-review", detail)
+                } }
+                publishSessions()
+                callback?.let { post { it(if (current == identity && observation.availability == OutputAvailability.READABLE) Uri.parse(identity.uri) else null) } }
+                val next = pendingRead; pendingRead = null
+                if (next != null) { readEntries.remove(next.id); admitRead(next) }
+            }
         }
     }
 

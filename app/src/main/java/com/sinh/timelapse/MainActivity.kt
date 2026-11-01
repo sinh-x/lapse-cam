@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var attentionNotice: TextView
     private var sessionAttentionDetails: TextView? = null
     private var sessionsView: SessionsView? = null
+    private var sessionsDialog: SessionsDialog? = null
     private var displayedSession: String? = null
     private lateinit var timestampSettings: Button
     private var appearance = TimestampAppearance()
@@ -160,6 +161,8 @@ class MainActivity : ComponentActivity() {
                 nextWorkTick = android.os.SystemClock.elapsedRealtime() + 1000
                 work.reconcile()
                 renderWork()
+                sessionsView?.refreshDates()
+                workView?.refreshDates()
             }
             handler.postDelayed(this, 250)
         }
@@ -191,16 +194,19 @@ class MainActivity : ComponentActivity() {
         }
         model.state.observe(this) { state ->
             renderCapture(state); bindCamera()
+            sessionsView?.loading(!state.loading && !state.recoveryBlocked,
+                if (state.recoveryBlocked) "Session metadata unavailable. Retained data; see diagnostics and recovery on Camera." else "Loading saved sessions…")
             if (!state.loading && !state.recoveryBlocked) sync.backfillAssociations(model.sessions.value.orEmpty())
         }
         model.sessions.observe(this) { sessions ->
             sessionsView?.render(sessions)
             if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) sync.backfillAssociations(sessions)
             backlog.text = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size,
-                sessions.sumOf { it.bytes } / 1048576.0, sessions.count { it.canRetry || it.error.isNotEmpty() })
+                sessions.sumOf { it.bytes } / 1048576.0, sessions.distinctBy { it.id }.count { it.needsAttention })
             renderWork()
         }
         work.state.observe(this) { renderWork(); sessionsView?.render(model.sessions.value.orEmpty()) }
+        model.outputReviewError.observe(this) { sessionsView?.evidenceUnavailable(it != null); renderAttentionDestinations() }
         sync.state.observe(this) { sharedView?.render(it) }
         downloadVideo = savedInstanceState?.getString("syncDownloadVideo")?.let { org.json.JSONObject(it) }
         downloadMobileConsent = savedInstanceState?.getBoolean("syncDownloadMobile") ?: false
@@ -210,7 +216,10 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState?.getBoolean("workOpen") == true) {
             showWork(savedInstanceState.getString("workId"))
             workView?.restore(savedInstanceState.getString("workPage") ?: "list", savedInstanceState.getString("workId"), savedInstanceState.getString("workSetupReturn"), savedInstanceState.getBoolean("workArchivedView"), savedInstanceState.getString("workTypeFilter"), savedInstanceState.getString("workSort"))
+            savedInstanceState.getBundle("timeboxBrowser")?.let { workView?.restoreBrowserState(it) }
         }
+        savedInstanceState?.getBundle("sessionsBrowser")?.let { showSessions(); sessionsView?.restoreState(it) }
+        if (savedInstanceState == null) routeSessions(intent)
         if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings()
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
     }
@@ -354,7 +363,7 @@ class MainActivity : ComponentActivity() {
         val cardTop = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         workTitle = label("No timebox running", 14f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         cardTop.addView(workTitle, LinearLayout.LayoutParams(0, -2, 1f))
-        workButton = Button(this).apply { text = "Work"; setOnClickListener { showWork() } }
+        workButton = Button(this).apply { text = "Timeboxes"; setOnClickListener { showWork() } }
         cardTop.addView(workButton, LinearLayout.LayoutParams(-2, -2))
         card.addView(cardTop)
         val timing = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -475,18 +484,19 @@ class MainActivity : ComponentActivity() {
         renderBlackout() // Reveal and restore bars before exposing/announcing the notice.
         renderAttentionDestinations()
         if (sessionNotices > 0 || workNotices > 0) {
-            val destinations = listOfNotNull("Sessions".takeIf { sessionNotices > 0 }, "Work".takeIf { workNotices > 0 }).joinToString(" and ")
+            val destinations = listOfNotNull("Sessions".takeIf { sessionNotices > 0 }, "Timeboxes".takeIf { workNotices > 0 }).joinToString(" and ")
             attentionNotice.visibility = View.VISIBLE
             attentionNotice.text = "New attention in $destinations. Open $destinations for details; recording controls are unchanged."
         }
     }
 
     private fun renderAttentionDestinations() {
-        val sessions = maxOf(model.attention.snapshot.count,
-            model.sessions.value.orEmpty().count { it.canRetry || it.error.isNotEmpty() })
+        val sessions = model.sessions.value.orEmpty().distinctBy { it.id }.count { it.needsAttention }
+        val sessionNotices = model.attention.snapshot.count
         val workCount = maxOf(work.attention.snapshot.count, if (work.state.value?.error != null) 1 else 0)
-        val sessionsLabel = if (sessions > 0) "Sessions · attention ($sessions)" else "Sessions"
-        val workLabel = if (workCount > 0) "Work · attention ($workCount)" else "Work"
+        val sessionsLabel = if (sessions > 0) "Sessions · attention ($sessions)"
+            else if (sessionNotices > 0) "Sessions · notices ($sessionNotices)" else "Sessions"
+        val workLabel = if (workCount > 0) "Timeboxes · attention ($workCount)" else "Timeboxes"
         if (sessionsButton.text.toString() != sessionsLabel) sessionsButton.text = sessionsLabel
         if (workButton.text.toString() != workLabel) workButton.text = workLabel
         sessionAttentionDetails?.let { view ->
@@ -494,7 +504,7 @@ class MainActivity : ComponentActivity() {
             if (view.text.toString() != detail) view.text = detail
             (view.parent as? View)?.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
         }
-        if (sessions == 0 && workCount == 0) attentionNotice.visibility = View.GONE
+        if (sessions == 0 && sessionNotices == 0 && workCount == 0) attentionNotice.visibility = View.GONE
     }
 
     private fun renderBlackout() {
@@ -738,22 +748,34 @@ class MainActivity : ComponentActivity() {
     }
     private fun showSessions() {
         if (sessionsView != null) return
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)) }
-        sessionAttentionDetails = label("", 14f).apply { contentDescription = "Sessions attention details" }
-        panel.addView(ScrollView(this).apply { addView(sessionAttentionDetails) }, LinearLayout.LayoutParams(-1, dp(96)))
-        listOf(backlog, export, open, discard).forEach { (it.parent as? android.view.ViewGroup)?.removeView(it); panel.addView(it) }
         val view = SessionsView(this, open = { openSessionVideo(it.id) }, retry = { model.retrySession(it.id) }, delete = {
             confirmDelete(it.id, "Delete ${it.retained} retained source photos and cancel queued work? Published video and other sessions are unchanged. Unknown files stop deletion.")
-        }, linkedWork = { id -> showRecordingLinks(id) }, linkSummary = { id ->
+        }, linkedWork = ::showRecordingLinks, linkSummary = { id ->
             val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
-            if (work.state.value?.error != null) "Work context unavailable; retained" else "Linked timeboxes: ${links.map { it.workId }.distinct().size}"
-        })
-        panel.addView(view, LinearLayout.LayoutParams(-1, 0, 1f)); sessionsView = view; view.render(model.sessions.value.orEmpty())
-        AlertDialog.Builder(this).setTitle("Sessions").setView(panel).setPositiveButton("Close", null).create().apply {
-            setOnShowListener { window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.90).toInt()) }
-            showBlackoutModal(this) { sessionsView = null; sessionAttentionDetails = null }
+            if (work.state.value?.error != null) "Timebox context unavailable; retained" else "Linked timeboxes: ${links.map { it.workId }.distinct().size}"
+        }, checkOutput = model::recheckVideo)
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        listOf(backlog, export, open, discard).forEach { (it.parent as? ViewGroup)?.removeView(it); actions.addView(it) }
+        view.addView(ScrollView(this).apply { addView(actions) }, LinearLayout.LayoutParams(-1, dp(128)))
+        sessionsView = view; sessionAttentionDetails = view.diagnostics
+        val state = model.state.value
+        view.loading(state?.let { !it.loading && !it.recoveryBlocked } == true,
+            if (state?.recoveryBlocked == true) "Session metadata unavailable. Data retained; see Camera recovery." else "Loading saved sessions…")
+        view.evidenceUnavailable(model.outputReviewError.value != null)
+        view.render(model.sessions.value.orEmpty())
+        modalDepth++; updateBlackout()
+        sessionsDialog = SessionsDialog(this, view) {
+            sessionsView = null; sessionsDialog = null; sessionAttentionDetails = null; modalDepth--; updateBlackout()
+        }.also { it.show() }
+    }
+    private fun routeSessions(value: Intent) {
+        val id = value.getStringExtra("sessionId")
+        if (id != null || value.getBooleanExtra("sessionsAttention", false)) {
+            showSessions()
+            if (id != null) sessionsView?.showSession(id) else sessionsView?.showAttention()
         }
     }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); routeSessions(intent) }
     private fun showRecordingLinks(id: String) {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)); setPadding(dp(12), dp(12), dp(12), dp(12)) }
         val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
@@ -771,7 +793,7 @@ class MainActivity : ComponentActivity() {
     private fun openSessionVideo(id: String) { model.openSessionVideo(id) { uri -> if (!isDestroyed) {
         if (uri == null) {
             workView?.markUnavailable(id)
-            Toast.makeText(this, "Output missing or unreadable. Work context and retained sources are unchanged.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Output missing or unreadable. Timebox context and retained sources are unchanged. See Sessions for the observed state.", Toast.LENGTH_LONG).show()
         } else openVideoUri(uri)
     } } }
     private fun openVideoUri(uri: android.net.Uri) {
@@ -819,6 +841,8 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean("sheetOpen", sheet?.isShowing == true)
         outState.putBoolean("workOpen", workView != null); outState.putString("workPage", workView?.savedPage()); outState.putString("workId", workView?.selectedId()); outState.putString("workSetupReturn", workView?.setupReturnId()); outState.putBoolean("workArchivedView", workView?.isShowingArchived() == true)
         outState.putString("workTypeFilter", workView?.activityTypeFilter()); outState.putString("workSort", workView?.listSort())
+        outState.putBundle("sessionsBrowser", sessionsView?.saveState())
+        outState.putBundle("timeboxBrowser", workView?.saveBrowserState())
         outState.putString("syncDownloadVideo", downloadVideo?.toString())
         outState.putBoolean("syncDownloadMobile", downloadMobileConsent)
         outState.putBoolean("syncDownloadPending", downloadPickerPending)
@@ -834,7 +858,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         activityDestroyed = true; updateMotionSensors(false); blackout.close(); renderBlackout()
-        sheet?.dismiss(); workDialog?.dismiss(); super.onDestroy()
+        sheet?.dismiss(); workDialog?.dismiss(); sessionsDialog?.dismiss(); super.onDestroy()
     }
     private companion object {
         const val LIGHT_SYSTEM_BARS = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
