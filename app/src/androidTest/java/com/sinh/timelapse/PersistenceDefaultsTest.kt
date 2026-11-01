@@ -62,6 +62,22 @@ class PersistenceDefaultsTest {
         }
     }
 
+    @Test fun blackoutIsDefaultOnAndPersistsIndependentlyOfSessionDefaults() {
+        isolatedPreferences { preferences ->
+            assertTrue(CaptureDefaults(preferences).blackoutEnabled)
+            for (enabled in listOf(false, true)) {
+                CaptureDefaults(preferences).blackoutEnabled = enabled
+                assertTrue(preferences.edit().commit())
+                val reopened = CaptureDefaults(preferences)
+                assertEquals(enabled, reopened.blackoutEnabled)
+                reopened.rememberCapture(SamplingConfiguration.Adaptive(30, 30), 5, SessionSplit.DEFAULT)
+                reopened.rememberAppearance(TimestampAppearance())
+                assertEquals(enabled, CaptureDefaults(preferences).blackoutEnabled)
+                assertEquals(enabled, preferences.getBoolean("blackoutEnabled", !enabled))
+            }
+        }
+    }
+
     @Test fun everyAppearanceFieldRoundTripsUsingStableNames() {
         isolatedPreferences { preferences ->
             for (family in StampFamily.entries) for (bold in listOf(false, true))

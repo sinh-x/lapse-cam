@@ -1,4 +1,4 @@
-name: Android checks
+name: Android host checks
 
 on:
   pull_request:
@@ -54,14 +54,16 @@ jobs:
             sdkmanager --list_installed
             sha256sum .github/workflows/android.yml gradle/wrapper/gradle-wrapper.properties
           } | tee app/build/ci/environment.txt
-      - name: Host checks, both debug APKs and lint
+      # APK builds, lint and relevant Pixel checks run locally before merge.
+      # See docs/VALIDATION_WORKFLOW.md; hosted CI covers every host unit test.
+      - name: Host checks
         shell: bash
         run: |
           set -euo pipefail
           python3 tools/verify_session_results.py --self-test 2>&1 | tee app/build/ci/session-accounting.log
           python3 tools/verify_timebox_results.py --self-test 2>&1 | tee app/build/ci/timebox-accounting.log
           ./gradlew --no-daemon --console=plain -Pandroid.builder.sdkDownload=false \
-            :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug \
+            :app:testDebugUnitTest \
             2>&1 | tee app/build/ci/gradle.log
       - name: Artifact digests (including partial/failure evidence)
         if: always()

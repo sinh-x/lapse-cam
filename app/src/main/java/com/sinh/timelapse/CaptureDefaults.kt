@@ -4,6 +4,11 @@ import android.content.SharedPreferences
 
 /** The existing new-session preferences, not session metadata or a settings migration. */
 internal class CaptureDefaults(private val preferences: SharedPreferences) {
+    // Display preference: never frozen into a CaptureSession or covered by session locks.
+    var blackoutEnabled: Boolean
+        get() = preferences.getBoolean("blackoutEnabled", true)
+        set(value) { preferences.edit().putBoolean("blackoutEnabled", value).apply() }
+
     val adaptive: Boolean get() = preferences.getBoolean("adaptive", true)
     val maxSeconds: Int get() = preferences.getInt("maxSeconds", 30)
     val interval: Int get() = preferences.getInt("interval", 5)

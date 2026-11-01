@@ -26,6 +26,7 @@ Platform exploration: [Linux / NixOS webcam timelapse ideas](docs/LINUX_WEBCAM_E
 - **Bounded recovery:** three export attempts, with app-open retry delays of 10s/30s, then Needs attention with sources retained. Cleanup has its own bounded cycle and never re-encodes a proven output. Explicit Retry starts a fresh cycle. Sessions shows retained backlog, errors, progress, exact Open and confirmed per-session source Delete.
 - **Fixed** mode preserves 1/2/5/10/30/60-second intervals with no video cap. Rear/front, mode/cap/fps, timestamp appearance and original time zone freeze per session.
 - Preview-first Camera: separate Work card, settings gear/bottom sheet, app-only state-driven LIVE, circular Start/Pause/Resume and separate split Finish. Work/settings/Sessions navigation keeps the camera surface mounted; actual backgrounding still pauses. Work minutes are independent of the MP4 cap.
+- **Blackout while recording (TTL-015):** after 30 seconds of eligible foreground inactivity, an opaque black app cover shows a compact red “LIVE — recording” banner. Status/navigation bars hide while covered and return with Camera; Android may still expose privacy indicators or transient bars on an edge swipe. Significant phone movement also reveals Camera without pausing capture; after 2 seconds of quiet, a fresh 30-second idle interval begins. Continued detected motion prevents blackout. This uses best-effort foreground acceleration/rotation sensing, ignores small vibrations and falls back to timer/tap behavior when sensors are unavailable; it is not scene-motion or absolute velocity detection. The first complete touch gesture, Back, Enter/Space or accessible Return action only returns to Camera; recording continues. Camera settings → Capture has a saved, default-on “Blackout screen while recording” option, editable during recording. Dialogs, focus loss, errors and non-live states suspend the cover. This is not screen-off/background recording or brightness dimming; the preview remains mounted. Black pixels may help OLED display power, not necessarily LCD backlights; no measured battery or reduced camera-work claim. The static indicator carries OLED burn-in risk. [Implementation/checks and remaining device UAT](docs/TTL015_IMPLEMENTATION.md).
 - Work: validated durable intention/draft, explicit independent Start/End, deadline expiry with permission-aware reminders, same-boot recovery/reboot interruption, copy-as-new and capture-time overlap details. No work Pause/Extend, journal, video overlay or automatic camera action. See [semantics and remaining validation](docs/TTL011_IMPLEMENTATION.md).
 - Recording details: active recording duration, wall-clock span, selected/total counts, saved bytes, video estimate, interval/stage and missed-slot indication. Active time excludes pauses; after interrupted recording, recovery is paused and labels last-saved timing with an unknown-tail warning. Legacy historical active time is unavailable.
 - Timestamp appearance panel: Monospace/Sans-serif/Serif, Regular/Bold, 32/44/60 output pixels, six positions and optional `yyyy-MM-dd` above `HH:mm:ss`. Defaults: 44 px bold monospace, bottom-left, date off. Preview and saved output share 720×1280 geometry, independent of UI font scale; saved photos cannot be restyled.
@@ -42,6 +43,12 @@ Adaptive example: 30s × 30fps gives a 900-frame budget. Photo 901 thins selecti
 
 ## Build
 
+**Current validation workflow:** Pixel is primary; relevant Pixel tests and hands-on
+checks plus APK builds/lint run locally. GitHub Actions runs host unit tests and
+accounting self-tests. OPPO/exhaustive cross-device UAT is optional follow-up,
+not a mandatory two-phone merge gate. [Scope, commands and evidence rules](docs/VALIDATION_WORKFLOW.md).
+Historical ticket results below remain historical, not new passes.
+
 Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **35.0.0**, with the pinned Gradle/AGP/Kotlin and cached dependencies. A minimal Java runtime is insufficient. Set `JAVA_HOME` and `ANDROID_HOME` (or configure `sdk.dir` in ignored `local.properties`). TTL-003 checks retain the exact existing host paths in the [offline runbook](docs/OFFLINE_INSTRUMENTATION.md). Do not install/upgrade tools or fetch missing dependencies without a separate bounded owner approval; prior retrieval approval is not blanket network permission.
 
 ```sh
@@ -50,7 +57,7 @@ Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **3
 ./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:lintDebug
 ```
 
-These are implementation phase checks, not the independently approved full review matrix. Device tests require fresh disposable-context/install/test permission and an explicit exact-identity wrapper. See the [runbook's no-uninstall command correction](docs/OFFLINE_INSTRUMENTATION.md#validation-and-phone-data-boundary) before any device invocation: the original matrix must be reconciled/reapproved. Do not use an implicit device, alternate runner or unapproved device substitution.
+These are the current local checks, not an independent review or human UAT pass. Historical signed matrix requirements are not silently rewritten by the current workflow split. Device tests require fresh disposable-context/install/test permission and an explicit exact-identity wrapper. See the [runbook's no-uninstall command correction](docs/OFFLINE_INSTRUMENTATION.md#validation-and-phone-data-boundary) before any device invocation: the original matrix must be reconciled/reapproved. Do not use an implicit device, alternate runner or unapproved device substitution.
 
 Local build artifacts (not committed):
 
@@ -190,7 +197,8 @@ This is a foreground-only prototype, with one current capture owner plus a persi
 - `WorkSessionsView.kt` / `WorkDialog.kt` / `TimeboxAlarmScheduler.kt`: IME-capable native Work surfaces, archive/restore/confirmed metadata deletion, identity-bound alarms/receiver and generic reminders.
 - `TimeboxReminderAccess.kt`: independent notification/background permission status and actionable labels (not a DND bypass).
 - `CameraUiPolicy.kt` / `CameraSettingsSheet.kt`: pure LIVE/action projection and native grouped settings sheet.
-- `tools/verify_timebox_results.py` / `.github/workflows/android.yml`: TTL-011 artifact accounting and separate hosted host/build/lint checks (neither is human UAT).
+- `BlackoutPolicy.kt` / `PhoneMotionPolicy.kt`: Activity-owned monotonic idle/eligibility, foreground inertial movement/settling, callback generations and one-shot timebox notices; no capture or media ownership.
+- `tools/verify_timebox_results.py` / `.github/workflows/android.yml`: historical TTL-011 artifact accounting and current hosted host-unit/accounting checks; APK builds, lint and relevant Pixel checks run locally (none is automatically human UAT acceptance).
 - `CaptureViewModel.kt`: capture cadence, 1Hz boundary admission/drain, foreground eligibility and separate file/media workers.
 - `SessionLifecycle.kt`: pure split, retry-cycle and fair due-work policies.
 - `SessionRepository.kt`: atomic index, stable successor identities, frozen manifests, receipts and exact resumable inventory cleanup.

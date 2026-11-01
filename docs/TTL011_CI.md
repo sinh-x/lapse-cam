@@ -1,5 +1,10 @@
 # TTL-011 hosted CI progress
 
+Historical TTL-011 record. The current owner-selected hosted/local split is in
+[Validation workflow](VALIDATION_WORKFLOW.md): CI now runs host/accounting tests,
+with APK builds/lint and relevant Pixel checks local. The full-hosted evidence
+below is retained, not relabelled as current or retroactively reapproved.
+
 Sinh explicitly authorized committing/pushing the TTL-011 branch and running scoped
 GitHub Actions, then selected a **draft PR to develop**. No merge, release,
 repository setting/secret change or device CI is authorized.
