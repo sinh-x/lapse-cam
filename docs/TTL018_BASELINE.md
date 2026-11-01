@@ -144,7 +144,9 @@ Off: no automatic export or source cleanup of these camera samples is admitted.
 The generated-media fixture above owns its own independent disposable sources.
 
 The full-app observer decorates the model's executor and Handler **in the test
-only, after hydration**. Queued-owner depth/task durations and immediate model
+only, after hydration**. Handles captured by a producer before decoration do not
+pass through that wrapper; do not claim complete processing-owner queue depth
+from the capture-only observer. Queued-owner depth/task durations and immediate model
 message depth/latency are attributed to that model, not Work/sync or the entire
 Android message queue. Future cadence/tick timers are excluded from immediate
 message depth. This instrumentation adds overhead and is not a production
@@ -156,16 +158,27 @@ continuous periodic rendering and cannot prove an input hang. Revision v2 uses
 bounded first-draw callbacks for opening and main feedback after Back, without
 requiring global UI idleness. Draw callbacks are not GPU/display-presentation
 measurements. Three opening samples/one Timeboxes sample are descriptive only,
-not reliable population percentiles. The harness deliberately does not mount the
-known runaway original 10k Sessions surface during capture; record that omission
-explicitly rather than claiming it passed.
+not reliable population percentiles. By default the harness does not mount the known runaway original 10k Sessions
+surface during capture; record that omission explicitly rather than claiming it
+passed. After a separately authorized candidate update, `includeLargeBrowser=true`
+can lift that skip. `openingSamples=30` collects the minimum opening sample count
+used by the frozen budget plan; raw arrays are retained with aggregate results.
+Do not retroactively treat earlier three-sample runs as 30-sample percentiles.
 
 Camera metrics are actual committed JPEG counts/dimensions plus **software
 shutter-request** gaps/save times. They are not hardware sensor timestamps.
 Previously interrupted runs can leave a recovered unknown tail: retain that
-state instead of resetting it for a cleaner result. If the usable-state wait
-fails, record that predicate failure and do not infer whether hydration,
-recovery, permissions or camera binding was the exact blocker without evidence.
+state instead of resetting it for a cleaner result. If the usable-state wait fails, record that predicate failure and do not infer
+whether hydration, recovery, permissions or camera binding was the exact blocker
+without evidence. The current harness checks keyguard before admission, samples
+model state on timeout and records foreground/lifecycle at capture admission.
+It starts a fresh **isolated task** (not cleared app data), preventing stale saved
+browser/task state from contaminating ordinary-entry measurement. First draw
+and input readiness are distinct: wait for browser window focus before injecting
+Back, and wait for that exact window to detach before the next opening. A global
+UI-idle wait or a draw without settled focus must not be used to infer an app hang
+or route Back into the underlying Camera Activity. Never bypass keyguard or
+change security settings to make a measurement run.
 
 Perfetto app-filtered track events and SurfaceFlinger frame timelines can be
 recorded under separately authorized tracing scope. On devices without tracefs,

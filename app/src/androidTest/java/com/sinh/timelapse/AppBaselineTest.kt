@@ -1,6 +1,7 @@
 package com.sinh.timelapse
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.*
 import android.view.KeyEvent
@@ -166,24 +167,36 @@ class AppBaselineTest {
             .put("maxMillis", sorted.lastOrNull() ?: -1)
     }
     private fun waitFor(scenario: ActivityScenario<MainActivity>, predicate: (CaptureViewModel.State) -> Boolean) {
+        var observed: CaptureViewModel.State? = null
         val end = SystemClock.elapsedRealtime() + 180_000
         while (SystemClock.elapsedRealtime() < end) {
             var ready = false
-            scenario.onActivity { ready = predicate(ViewModelProvider(it)[CaptureViewModel::class.java].state.value!!) }
+            scenario.onActivity {
+                observed = ViewModelProvider(it)[CaptureViewModel::class.java].state.value!!
+                ready = predicate(checkNotNull(observed))
+            }
             if (ready) return
             Thread.sleep(25)
         }
+        observed?.let { report(JSONObject().put("event", "state-timeout").put("loading", it.loading)
+            .put("recoveryBlocked", it.recoveryBlocked).put("message", it.message).put("cameraMessage", it.cameraMessage)
+            .put("boundLens", it.boundLens?.name).put("capturing", it.capturing)) }
         fail("Baseline state timeout; retain all fixture data")
     }
 
     @Test fun foregroundCaptureAndBrowse() {
         admitted()
         check(context.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+        check(!context.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked) {
+            "Selected device is locked; no app readiness/capture measurement admitted"
+        }
         val fixture = JSONObject(marker.readText())
         check(fixture.getJSONArray("sessions").length() == size)
         report(JSONObject().put("event", "app-start").put("syntheticSessions", size))
         val start = SystemClock.elapsedRealtime()
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+        val launch = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        ActivityScenario.launch<MainActivity>(launch).use { scenario ->
             waitFor(scenario) { !it.loading && !it.recoveryBlocked && it.boundLens == it.lens }
             val usable = SystemClock.elapsedRealtime() - start
             lateinit var model: CaptureViewModel
@@ -211,7 +224,16 @@ class AppBaselineTest {
             Thread.sleep(3000) // App-idle comparison, no capture or browser.
             val idleOwner = owner.maxQueued.get()
             val idleMain = main.maxPending.get()
-            scenario.onActivity { model.start(SamplingConfiguration.Adaptive(30, 15), split = SessionSplit.OFF) }
+            scenario.onActivity { activity ->
+                val foreground = WorkUiFixtures.field<Boolean>(activity, "activityForeground")
+                report(JSONObject().put("event", "capture-admission").put("activityForeground", foreground)
+                    .put("lifecycle", activity.lifecycle.currentState.name).put("windowFocused", activity.hasWindowFocus())
+                    .put("boundLens", model.state.value!!.boundLens?.name))
+                check(foreground && activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    "Activity lost foreground before capture admission; do not infer camera latency"
+                }
+                model.start(SamplingConfiguration.Adaptive(30, 15), split = SessionSplit.OFF)
+            }
             waitFor(scenario) { it.capturing && it.frames >= initialFrames + 3 }
             scenario.onActivity { captureId = model.state.value!!.session!!.directory.name }
             Thread.sleep(12_000)
@@ -220,15 +242,28 @@ class AppBaselineTest {
             val sessionOpens = mutableListOf<Long>()
             val sessionBacks = mutableListOf<Long>()
             val workOpens = mutableListOf<Long>()
-            // Original 10k Sessions renderer already exceeded the observation window/heap headroom.
-            // Do not repeat that known runaway while the camera holds valuable disposable samples.
+            // Opt-in after-change runs may lift the original renderer's safety skip explicitly.
+            val includeLarge = InstrumentationRegistry.getArguments().getString("includeLargeBrowser") == "true"
+            val samples = InstrumentationRegistry.getArguments().getString("openingSamples", "3").toInt().also { require(it in 1..30) }
+            var currentRoot: android.view.View? = null
             fun openToDraw(button: String, field: String): Long {
                 val begin = SystemClock.elapsedRealtime()
                 val drawn = CountDownLatch(1)
+                val focused = CountDownLatch(1)
                 val at = AtomicLong()
                 scenario.onActivity { activity ->
                     WorkUiFixtures.field<Button>(activity, button).performClick()
                     val root = WorkUiFixtures.field<android.view.View>(activity, field).rootView
+                    currentRoot = root
+                    val focusListener = object : android.view.ViewTreeObserver.OnWindowFocusChangeListener {
+                        override fun onWindowFocusChanged(hasFocus: Boolean) {
+                            if (hasFocus) {
+                                focused.countDown()
+                                root.post { if (root.viewTreeObserver.isAlive) root.viewTreeObserver.removeOnWindowFocusChangeListener(this) }
+                            }
+                        }
+                    }
+                    if (root.hasWindowFocus()) focused.countDown() else root.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
                     val listener = object : android.view.ViewTreeObserver.OnDrawListener {
                         override fun onDraw() {
                             if (at.compareAndSet(0, SystemClock.elapsedRealtime())) {
@@ -241,22 +276,35 @@ class AppBaselineTest {
                     root.invalidate()
                 }
                 check(drawn.await(60, TimeUnit.SECONDS)) { "First draw timeout; no UI-idle inference" }
+                check(focused.await(60, TimeUnit.SECONDS)) { "Window focus timeout; no Back injection into underlying Camera" }
                 return at.get() - begin
             }
             fun backToFeedback(): Long {
                 val begin = SystemClock.elapsedRealtime()
+                val detached = CountDownLatch(1)
+                scenario.onActivity {
+                    val root = checkNotNull(currentRoot)
+                    if (!root.isAttachedToWindow) detached.countDown()
+                    else root.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
+                        override fun onViewAttachedToWindow(view: android.view.View) = Unit
+                        override fun onViewDetachedFromWindow(view: android.view.View) {
+                            view.removeOnAttachStateChangeListener(this); detached.countDown()
+                        }
+                    })
+                }
                 instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                check(detached.await(60, TimeUnit.SECONDS)) { "Browser Back did not detach its window" }
                 val feedback = CountDownLatch(1)
                 Handler(Looper.getMainLooper()).post { feedback.countDown() }
                 check(feedback.await(60, TimeUnit.SECONDS))
                 return SystemClock.elapsedRealtime() - begin
             }
-            if (size <= 1000) repeat(3) {
+            if (size <= 1000 || includeLarge) repeat(samples) {
                 sessionOpens.add(openToDraw("sessionsButton", "sessionsView"))
                 sessionBacks.add(backToFeedback())
                 Thread.sleep(500)
             }
-            if (size <= 1000) {
+            if (size <= 1000 || includeLarge) repeat(samples) {
                 workOpens.add(openToDraw("workButton", "workView"))
                 backToFeedback()
             }
@@ -276,7 +324,10 @@ class AppBaselineTest {
             report(JSONObject().put("event", "app-complete").put("syntheticSessions", size)
                 .put("cameraUsableMillis", usable).put("sessionOpenToFirstDraw", summary(sessionOpens))
                 .put("sessionBackToMainFeedback", summary(sessionBacks)).put("timeboxOpenToFirstDraw", summary(workOpens))
-                .put("sessionOpenNotRun", if (size > 1000) "10k eager component already exceeded safe observation window" else "")
+                .put("sessionOpenSamplesMillis", JSONArray(sessionOpens)).put("sessionBackSamplesMillis", JSONArray(sessionBacks))
+                .put("timeboxOpenSamplesMillis", JSONArray(workOpens)).put("requestGapSamplesMillis", JSONArray(gaps))
+                .put("saveLatencySamplesMillis", JSONArray(saves))
+                .put("sessionOpenNotRun", if (size > 1000 && !includeLarge) "10k eager component already exceeded safe observation window" else "")
                 .put("idleOwnerMaxQueued", idleOwner).put("idleModelMainMaxPending", idleMain)
                 .put("ownerMaxQueued", owner.maxQueued.get()).put("ownerTasks", summary(owner.taskMillis))
                 .put("modelMainMaxPending", main.maxPending.get()).put("modelMainLatency", summary(main.latencies))

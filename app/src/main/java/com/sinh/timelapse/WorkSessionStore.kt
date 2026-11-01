@@ -37,7 +37,7 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
         check(!File(target.path + ".new").exists()) { "Interrupted work commit retained; recovery required" }
     }
     fun load(): WorkSnapshot {
-        blocked?.let { throw IllegalStateException("Work recovery blocked; bytes retained", it) }
+        blocked?.let { throw IllegalStateException("Timebox recovery blocked; bytes retained", it) }
         if (loaded) return snapshot
         try {
             safePaths()
@@ -58,9 +58,9 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
         require(next.deletedIds.containsAll(snapshot.deletedIds)) { "Deleted identities cannot be forgotten or reused" }
         validate(next)
         safePaths()
-        check(!existed || target.exists()) { "Work data disappeared; retained state not replaced" }
+        check(!existed || target.exists()) { "Timebox data disappeared; retained state not replaced" }
         if (existed && !target.readBytes().contentEquals(knownBytes)) {
-            val error = IllegalStateException("Work bytes changed outside the owner; retained")
+            val error = IllegalStateException("Timebox bytes changed outside the owner; retained")
             blocked = error; throw error
         }
         check(root.isDirectory || root.mkdir())
@@ -78,7 +78,7 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
             (beforeRecords.keys + nextRecords.keys).forEach { id ->
                 if (beforeRecords[id] != nextRecords[id]) recordRevisions[id] = (recordRevisions[id] ?: 0) + 1
             }
-            check(target.readBytes().contentEquals(bytes)) { "Work readback mismatch" }
+            check(target.readBytes().contentEquals(bytes)) { "Timebox readback mismatch" }
             snapshot = next
             knownBytes = bytes
             fault("after-publish")

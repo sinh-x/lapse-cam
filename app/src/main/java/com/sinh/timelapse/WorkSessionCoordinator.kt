@@ -90,7 +90,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
             store.commit(TimeboxPolicy.reconcile(recovered, now()))
         }
     }
-    fun now(): WorkMoment = clock?.invoke() ?: WorkMoment(checkNotNull(boot) { "Work clock not loaded" }, SystemClock.elapsedRealtime(), System.currentTimeMillis())
+    fun now(): WorkMoment = clock?.invoke() ?: WorkMoment(checkNotNull(boot) { "Timebox clock not loaded" }, SystemClock.elapsedRealtime(), System.currentTimeMillis())
     fun beginDraft(copy: WorkSession? = null): WorkDraft {
         check(Looper.myLooper() == Looper.getMainLooper())
         val draft = editorDraft ?: state.value?.snapshot?.draft ?: copy?.copyDraft() ?: WorkDraft()

@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private var sessionAttentionDetails: TextView? = null
     private var sessionsView: SessionsView? = null
     private var sessionsDialog: SessionsDialog? = null
+    private var topBrowser = "camera"
     private var displayedSession: String? = null
     private lateinit var timestampSettings: Button
     private var appearance = TimestampAppearance()
@@ -222,12 +223,15 @@ class MainActivity : ComponentActivity() {
         downloadPickerPending = savedInstanceState?.getBoolean("syncDownloadPending") ?: false
         updateBlackout()
         pendingWorkId = intent.getStringExtra("workId")
-        if (savedInstanceState?.getBoolean("workOpen") == true) {
+        fun restoreTimeboxes() {
+            if (savedInstanceState?.getBoolean("workOpen") != true) return
             showWork(savedInstanceState.getString("workId"))
             workView?.restore(savedInstanceState.getString("workPage") ?: "list", savedInstanceState.getString("workId"), savedInstanceState.getString("workSetupReturn"), savedInstanceState.getBoolean("workArchivedView"), savedInstanceState.getString("workTypeFilter"), savedInstanceState.getString("workSort"))
             savedInstanceState.getBundle("timeboxBrowser")?.let { workView?.restoreBrowserState(it) }
         }
-        savedInstanceState?.getBundle("sessionsBrowser")?.let { showSessions(); sessionsView?.restoreState(it) }
+        fun restoreSessions() { savedInstanceState?.getBundle("sessionsBrowser")?.let { showSessions(); sessionsView?.restoreState(it) } }
+        if (savedInstanceState?.getString("browserTop") == "timeboxes") { restoreSessions(); restoreTimeboxes() }
+        else { restoreTimeboxes(); restoreSessions() }
         if (savedInstanceState == null) routeSessions(intent)
         if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings()
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
@@ -318,7 +322,7 @@ class MainActivity : ComponentActivity() {
         split = spinner(listOf("Off — keep photos, manual export", "2 hours", "3 hours (default)")).apply { contentDescription = "Adaptive automatic session split"; setSelection(saved?.getInt("split") ?: SessionSplit.entries.indexOf(defaults.split)) }
         interval = spinner(intervals.map { "Every ${it}s" }).apply { contentDescription = "Photo capture interval"; setSelection(saved?.getInt("interval") ?: intervals.indexOf(defaults.interval).coerceAtLeast(0)) }
         fps = spinner(frameRates.map { "$it fps" }).apply { contentDescription = "Export frames per second"; setSelection(saved?.getInt("fps") ?: frameRates.indexOf(defaults.fps).coerceAtLeast(0)) }
-        listOf(lens, label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not work minutes", 14f), maxSeconds,
+        listOf(lens, label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not timebox minutes", 14f), maxSeconds,
             label("Adaptive auto-split (active recording time)", 14f), split, interval, fps).forEach { capturePanel.addView(it) }
         capturePanel.addView(label("With 2h/3h, Pause retains the session; Finish exports. Only verified output permits source cleanup. Off/Fixed/legacy remain manual. Foreground only; no cadence/storage guarantee.", 14f))
         blackoutToggle = CheckBox(this).apply {
@@ -736,10 +740,10 @@ class MainActivity : ComponentActivity() {
         if (workDialog != null) return
         val view = WorkSessionsView(this, work, { model.sessions.value.orEmpty() }, ::openSessionVideo,
             ::configureTimeboxNotifications, ::configureBackgroundTiming, id)
-        workView = view
+        workView = view; topBrowser = "timeboxes"
         modalDepth++; updateBlackout()
         workDialog = WorkDialog(this, view) {
-            workView = null; workDialog = null; modalDepth--; updateBlackout()
+            workView = null; workDialog = null; topBrowser = if (sessionsView != null) "sessions" else "camera"; modalDepth--; updateBlackout()
         }.apply { show() }
     }
     private fun renderWork() {
@@ -792,7 +796,7 @@ class MainActivity : ComponentActivity() {
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         listOf(backlog, export, open, discard).forEach { (it.parent as? ViewGroup)?.removeView(it); actions.addView(it) }
         view.addView(ScrollView(this).apply { addView(actions) }, LinearLayout.LayoutParams(-1, dp(128)))
-        sessionsView = view; sessionAttentionDetails = view.diagnostics
+        sessionsView = view; sessionAttentionDetails = view.diagnostics; topBrowser = "sessions"
         val state = model.state.value
         view.loading(state?.let { !it.loading && !it.recoveryBlocked } == true,
             if (state?.recoveryBlocked == true) "Session metadata unavailable. Data retained; see Camera recovery." else "Loading saved sessions…")
@@ -800,7 +804,8 @@ class MainActivity : ComponentActivity() {
         view.render(model.sessions.value.orEmpty())
         modalDepth++; updateBlackout()
         sessionsDialog = SessionsDialog(this, view) {
-            sessionsView = null; sessionsDialog = null; sessionAttentionDetails = null; modalDepth--; updateBlackout()
+            sessionsView = null; sessionsDialog = null; sessionAttentionDetails = null
+            topBrowser = if (workView != null) "timeboxes" else "camera"; modalDepth--; updateBlackout()
         }.also { it.show() }
     }
     private fun routeSessions(value: Intent) {
@@ -876,6 +881,7 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean("sheetOpen", sheet?.isShowing == true)
         outState.putBoolean("workOpen", workView != null); outState.putString("workPage", workView?.savedPage()); outState.putString("workId", workView?.selectedId()); outState.putString("workSetupReturn", workView?.setupReturnId()); outState.putBoolean("workArchivedView", workView?.isShowingArchived() == true)
         outState.putString("workTypeFilter", workView?.activityTypeFilter()); outState.putString("workSort", workView?.listSort())
+        outState.putString("browserTop", topBrowser)
         outState.putBundle("sessionsBrowser", sessionsView?.saveState())
         outState.putBundle("timeboxBrowser", workView?.saveBrowserState())
         outState.putString("syncDownloadVideo", downloadVideo?.toString())
