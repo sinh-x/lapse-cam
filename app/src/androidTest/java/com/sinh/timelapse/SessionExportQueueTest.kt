@@ -46,6 +46,23 @@ class SessionExportQueueTest {
         VideoExporter.PublishedVerification(uri ?: Uri.parse("content://fixture/$operation"), "0".repeat(64), count, session.fps,
             (session.configuration as SamplingConfiguration.Adaptive).maxSeconds)
 
+    @Test fun reviewGenerationIncludesBoundedSourceCursorProgress() = fixture { _, _, store, repo ->
+        val session = store.create(SamplingConfiguration.Adaptive(5, 15), SessionLens.REAR, TimestampAppearance(), SessionSplit.DEFAULT)
+        repo.register(session)
+        repeat(20) { add(store, session) }
+        repo.close(session, false)
+        var record = repo.get(session.directory.name)
+        val verified = proof(session, record.operation, null, record.selected)
+        record = repo.receipt(record, verified).let { it.copy(cleanupCycle = it.cleanupCycle.reserve()) }
+        repo.put(record)
+        val beforeGeneration = repo.revision
+        val before = repo.remaining(record).first
+        assertFalse(repo.cleanup(record, verified))
+        assertTrue(repo.revision > beforeGeneration)
+        assertTrue(repo.remaining(record).first < before)
+        assertEquals(20, repo.get(record.id).count) // Durable index summary is not rewritten to fake progress.
+    }
+
     @Test fun typedActivityUsesActualStagesAndRejectsLateProgress() = fixture { context, root, store, repo ->
         val session = closed(store, repo)
         val media = Pending()

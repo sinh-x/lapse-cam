@@ -81,6 +81,14 @@ transitions and incident observations are not routed through that mailbox.
 Maintenance admission is bounded separately. Recovery uses one immutable index
 ID set rather than rebuilding/scanning the entire index for every directory.
 Unchanged Timeboxes row projections and sync-association hints are reused.
+Historical SessionReview objects are reused until the repository's review
+revision or foreground admission context changes; actual operation identity,
+progress and output observations remain live overlays. Bounded source cursor
+steps invalidate that generation even without an index rewrite. Failed
+projections never commit a successful cache key. Sessions date grouping is
+reused while IDs/start dates/attention membership remain unchanged, but current
+status/action labels still come from the latest snapshot. Causal snapshots are
+cached only between real transitions and expose an unmodifiable details map.
 No publication verification, inventory validation or durable attempt accounting
 was removed to improve timings.
 

@@ -83,6 +83,11 @@ class CaptureViewModel @JvmOverloads constructor(
     private var reviewProgress = 0
     private var manualRevision = 0L
     private var lastReviewKey: List<Any?>? = null
+    private var recordReviewKey: Pair<Long, Boolean>? = null
+    private var reviewRecords = emptyList<SessionRecord>()
+    private var recordReviews = emptyList<SessionReview>()
+    private var recordOperations = emptyMap<String, String>()
+    private var outputReviewDiagnostic: String? = null
     private var attentionRevision = -1L
     private var manualActive: ActiveProcessing? = null
     private var deletionActive: ActiveProcessing? = null
@@ -613,12 +618,11 @@ class CaptureViewModel @JvmOverloads constructor(
         val key = listOf(repository.revision, manualRevision, reviewRunning, reviewProgress, outputEvidence.revision,
             manualActive, deletionActive, exportQueue?.active, manualIssues.toMap(), foreground)
         if (key == lastReviewKey) return
-        lastReviewKey = key
-        val records = repository.records()
-        val identities = records.mapTo(HashSet()) { it.id }
-        val reviews = manualReviews.values.filter { it.id !in identities }.map { review -> review.copy(processing = SessionProcessing(
-            active = manualActive?.takeIf { it.sessionId == review.id } ?: deletionActive?.takeIf { it.sessionId == review.id },
-            issues = listOfNotNull(manualIssues[review.id]), hydrated = true)) } + records.map { record ->
+        val baseKey = repository.revision to foreground
+        if (recordReviewKey != baseKey) {
+        reviewRecords = repository.records()
+        recordOperations = reviewRecords.associate { it.id to it.operation }
+        recordReviews = reviewRecords.map { record ->
             val session = repository.session(record)
             val remaining = repository.remaining(record)
             SessionReview(record.id, session.startedAt, when (session.configuration) {
@@ -635,21 +639,37 @@ class CaptureViewModel @JvmOverloads constructor(
                     SessionPhase.DELETED -> "Photos deleted by user"
                     SessionPhase.NEEDS_ATTENTION -> "Needs attention"
                     else -> record.phase.name.lowercase().replaceFirstChar { it.uppercase() }
-                }, if (running == record.id) progress else 0, record.exportCycle.attempts, record.cleanupCycle.attempts,
+                }, 0, record.exportCycle.attempts, record.cleanupCycle.attempts,
                 record.error, record.output, (record.phase == SessionPhase.NEEDS_ATTENTION && record.cycle.exhausted) ||
                     (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()),
                 !record.busy && record.phase !in setOf(SessionPhase.DELETED, SessionPhase.FINISHED) && !record.cycle.reserved,
                 verifiedOperation = record.operation.takeIf { record.receipt != null && record.output != null },
-                processing = SessionProcessingProjection.project(record, deletionActive?.takeIf { it.sessionId == record.id } ?: exportQueue?.active, foreground))
+                processing = SessionProcessingProjection.project(record, null, foreground))
+        }
+        recordReviewKey = baseKey
+        }
+        val records = reviewRecords
+        val activeBySession = listOfNotNull(exportQueue?.active, deletionActive).associateBy { it.sessionId }
+        val reviews = manualReviews.values.filter { it.id !in recordOperations }.map { review -> review.copy(processing = SessionProcessing(
+            active = manualActive?.takeIf { it.sessionId == review.id } ?: deletionActive?.takeIf { it.sessionId == review.id },
+            issues = listOfNotNull(manualIssues[review.id]), hydrated = true)) } + recordReviews.map { review ->
+            val active = activeBySession[review.id]?.takeIf { it.operation == recordOperations[review.id] }
+            if (active == null) review else review.copy(progress = active.percent ?: 0,
+                processing = review.processing.copy(active = active, wait = ProcessingWait.NONE))
         }
         val evidenceError = runCatching { outputEvidence.load() }.exceptionOrNull()?.let {
             "Output review unavailable: ${it.message}. Existing evidence retained; attention count may be incomplete."
         }
-        val decorated = reviews.map { review -> review.copy(outputObservation =
-            if (evidenceError == null) outputEvidence.observation(review.outputIdentity) else review.outputObservation) }
+        val decorated = reviews.map { review ->
+            val observation = if (evidenceError == null && review.output != null) outputEvidence.observation(review.outputIdentity)
+                else review.outputObservation
+            if (observation == review.outputObservation) review else review.copy(outputObservation = observation)
+        }
         val observeAttention = attentionRevision != repository.revision
         attentionRevision = repository.revision
-        post {
+        val observationChanged = outputReviewDiagnostic != evidenceError
+        outputReviewDiagnostic = evidenceError
+        if (observeAttention || observationChanged) post {
             if (outputReviewError.value != evidenceError) outputReviewError.value = evidenceError
             if (evidenceError != null) attention.failure("output-review", evidenceError) else attention.resolve("output-review")
             if (observeAttention) {
@@ -657,6 +677,7 @@ class CaptureViewModel @JvmOverloads constructor(
                 if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
             }
         }
+        lastReviewKey = key // Failed loads/projections must never poison the retry/diagnostic seam.
         reviewUpdates.offer(ReviewDelivery(decorated, listOfNotNull(exportQueue?.active, manualActive, deletionActive).distinct()))
     }
 

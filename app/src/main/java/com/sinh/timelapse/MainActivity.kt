@@ -71,6 +71,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var split: Spinner
     private lateinit var finish: Button
     private lateinit var backlog: TextView
+    private var backlogSource: List<SessionReview>? = null
+    private var backlogMode = -1
+    private var attentionSource: List<SessionReview>? = null
+    private var actionableSessionCount = 0
     private lateinit var sessionsButton: Button
     private lateinit var workButton: Button
     private lateinit var attentionNotice: TextView
@@ -204,14 +208,14 @@ class MainActivity : ComponentActivity() {
             val ready = !state.loading && !state.recoveryBlocked
             if (ready && !associationReady) requestAssociationBackfill(model.sessions.value.orEmpty())
             associationReady = ready
+            renderBacklog()
             renderProcessing()
         }
         model.sessions.observe(this) { sessions ->
             sessionsView?.render(sessions)
             if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) requestAssociationBackfill(sessions)
             renderProcessing()
-            backlog.text = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size,
-                sessions.sumOf { it.bytes } / 1048576.0, sessions.distinctBy { it.id }.count { it.needsAttention })
+            renderBacklog()
             renderWork()
         }
         work.state.observe(this) { renderWork(); sessionsView?.render(model.sessions.value.orEmpty()) }
@@ -506,7 +510,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderAttentionDestinations() {
-        val sessions = model.sessions.value.orEmpty().distinctBy { it.id }.count { it.needsAttention }
+        val values = model.sessions.value.orEmpty()
+        if (attentionSource !== values) {
+            attentionSource = values
+            actionableSessionCount = values.distinctBy { it.id }.count { it.needsAttention }
+        }
+        val sessions = actionableSessionCount
         val sessionNotices = model.attention.snapshot.count
         val workCount = maxOf(work.attention.snapshot.count, if (work.state.value?.error != null) 1 else 0)
         val sessionsLabel = if (sessions > 0) "Sessions · attention ($sessions)"
@@ -763,6 +772,19 @@ class MainActivity : ComponentActivity() {
         }
         updateBlackout()
         if (state.loaded && pendingWorkId != null) { val id = pendingWorkId; pendingWorkId = null; showWork(id) }
+    }
+    private fun renderBacklog() {
+        val state = model.state.value
+        val values = model.sessions.value.orEmpty()
+        val mode = if (state?.recoveryBlocked == true) 1 else if (state?.loading != false) 0 else 2
+        if (backlogSource === values && backlogMode == mode) return
+        backlogSource = values; backlogMode = mode
+        backlog.text = when {
+            state?.recoveryBlocked == true -> "Session metadata unavailable; totals unknown. Data retained."
+            state?.loading != false -> "Loading session metadata; totals not yet available."
+            else -> String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", values.size,
+                values.sumOf { it.bytes } / 1048576.0, values.distinctBy { it.id }.count { it.needsAttention })
+        }
     }
     private fun requestAssociationBackfill(values: List<SessionReview>) {
         val hints = values.mapNotNull { review -> review.output?.let { Triple(review.id, it, review.verifiedOperation) } }

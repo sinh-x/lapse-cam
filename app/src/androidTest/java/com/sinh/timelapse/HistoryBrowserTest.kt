@@ -48,6 +48,20 @@ class HistoryBrowserTest {
         assertEquals(requests[0], requests[1]) // Owner deduplicates the same admitted entry token.
         assertTrue(restored.back()); assertFalse(restored.back())
     }
+    @Test fun reusedDateProjectionStillShowsLatestStatusActionsAndAttention() = fixture { activity ->
+        val browser = SessionsView(activity); activity.setContentView(browser)
+        val before = review("today", failed = true).copy(status = "Old status", canRetry = true)
+        browser.render(listOf(before))
+        val after = before.copy(status = "Current status", canRetry = false)
+        browser.render(listOf(after))
+        val list = WorkUiFixtures.descendants(browser).filterIsInstance<ListView>().single()
+        assertTrue((list.adapter.getView(1, null, list) as TextView).text.contains("Current status"))
+        browser.showSession("today")
+        assertFalse(WorkUiFixtures.descendants(browser).filterIsInstance<android.widget.Button>().single { it.text == "Retry" }.isEnabled)
+        browser.render(listOf(after.copy(processing = SessionProcessing(hydrated = true))))
+        assertTrue(WorkUiFixtures.descendants(browser).filterIsInstance<android.widget.Button>().any { it.text.toString().contains("Needs attention (0)") })
+    }
+
     @Test fun staleSelectionHasSafeBackAndLoadingIsNotEmptyHistory() = fixture { activity ->
         val browser = SessionsView(activity); activity.setContentView(browser)
         browser.loading(false); browser.showSession("gone")

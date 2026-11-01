@@ -43,7 +43,7 @@ internal class TimeboxAlarmScheduler(private val context: Context) : TimeboxRemi
             .setData(Uri.parse("timelapse://work/$id")).putExtra("workId", id), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         notifications.notify(id, 1, Notification.Builder(context, CHANNEL)
             .setSmallIcon(com.sinh.timelapse.R.drawable.ic_timelapse)
-            .setContentTitle("Timebox ended").setContentText("Open Work to review or create a new timebox.")
+            .setContentTitle("Timebox ended").setContentText("Open Timeboxes to review or create a new timebox.")
             .setVisibility(Notification.VISIBILITY_PUBLIC).setOnlyAlertOnce(true).setAutoCancel(true).setContentIntent(open).build())
     }
     companion object { const val CHANNEL = "work-timebox" }

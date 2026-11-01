@@ -30,6 +30,10 @@ class SessionsView(
     private val body = FrameLayout(context)
     private val list = ListView(context).apply { dividerHeight = 1; cacheColorHint = Color.TRANSPARENT }
     private var values = emptyList<SessionReview>()
+    private val reviewIndex = mutableMapOf<String, SessionReview>()
+    private var attentionCount = 0
+    private var projection: SessionHistory? = null
+    private var projectionKey = ""
     private var loaded = true
     private var evidenceMissing = false
     private var loadMessage = "Loading saved sessions…"
@@ -82,13 +86,23 @@ class SessionsView(
     }
     fun refreshDates() {
         val key = "${LocalDate.now()}:${ZoneId.systemDefault().id}"
-        if (key != dayKey) { dayKey = key; if (selected == null) rebuildList() else renderDetail() }
+        if (key != dayKey) { dayKey = key; projection = null; if (selected == null) rebuildList() else renderDetail() }
     }
     fun evidenceUnavailable(value: Boolean) {
         evidenceMissing = value
-        attentionButton.text = "Needs attention (${values.distinctBy { it.id }.count { it.needsAttention }}${if (evidenceMissing) " known; output review unavailable" else ""}) · all dates"
+        attentionButton.text = "Needs attention ($attentionCount${if (evidenceMissing) " known; output review unavailable" else ""}) · all dates"
     }
     fun render(values: List<SessionReview>) {
+        if (this.values === values) { refreshDates(); if (selected != null) renderDetail(); return }
+        val sameIds = this.values.size == values.size && values.indices.all { this.values[it].id == values[it].id }
+        if (!sameIds) { reviewIndex.clear(); attentionCount = 0; projection = null }
+        values.forEach { value ->
+            val old = reviewIndex[value.id]
+            if (old == null || old.startedAt != value.startedAt || old.needsAttention != value.needsAttention) projection = null
+            if (old?.needsAttention == true) attentionCount--
+            if (value.needsAttention) attentionCount++
+            if (old !== value) reviewIndex[value.id] = value
+        }
         this.values = values
         evidenceUnavailable(evidenceMissing)
         val active = values.mapNotNull { it.processing.active }.distinct()
@@ -148,8 +162,11 @@ class SessionsView(
         if (!loaded) result.add(Item("loading", loadMessage, null))
         else {
             val zone = ZoneId.systemDefault(); val today = LocalDate.now(zone)
-            val history = SessionHistory.project(values, today, zone, attention)
-            fun sessions(rows: List<SessionReview>) { rows.forEach { value ->
+            val key = "$today:$zone:$attention"
+            val history = if (projection == null || projectionKey != key) SessionHistory.project(values, today, zone, attention)
+                .also { projection = it; projectionKey = key } else checkNotNull(projection)
+            fun sessions(rows: List<SessionReview>) { rows.forEach { saved ->
+                val value = reviewIndex[saved.id] ?: saved
                 val issues = value.processing.issues.joinToString("; ") { "${it.stage.label}: ${it.reason}" }
                 val output = value.currentObservation?.takeIf { it.availability.actionable }?.availability?.label
                 result.add(Item("session:${value.id}", "${date(value.startedAt)} · ${value.id}\n${value.status}" +
@@ -175,7 +192,7 @@ class SessionsView(
         }
     }
     private fun renderDetail() {
-        val value = values.firstOrNull { it.id == selected }
+        val value = reviewIndex[selected]
         if (value == null) {
             detailText?.text = if (!loaded) loadMessage else "This session is unavailable. Back returns to the browser."
             listOf(openButton, retryButton, deleteButton, recheckButton, linksButton).forEach { it?.isEnabled = false }; return

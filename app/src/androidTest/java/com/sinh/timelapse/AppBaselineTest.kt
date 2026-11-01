@@ -184,6 +184,63 @@ class AppBaselineTest {
         fail("Baseline state timeout; retain all fixture data")
     }
 
+    /** No capture or processing actions: isolate lifecycle events before/after test telemetry. */
+    @Test fun startupLifecycleDiagnostics() {
+        admitted()
+        val keyguard = context.getSystemService(android.app.KeyguardManager::class.java)
+        check(!keyguard.isKeyguardLocked) { "Unlock selected Pixel before lifecycle diagnosis" }
+        val events = mutableListOf<String>()
+        val monitor = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+        val callback = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+            events.add("${SystemClock.elapsedRealtime()}:${activity.javaClass.name}:$stage:finishing=${activity.isFinishing}")
+        }
+        instrumentation.runOnMainSync { monitor.addLifecycleCallback(callback) }
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)).use { scenario ->
+                var foregroundObserved = true
+                fun sample(name: String) {
+                    scenario.onActivity { activity ->
+                        val state = ViewModelProvider(activity)[CaptureViewModel::class.java].state.value!!
+                        foregroundObserved = WorkUiFixtures.field<Boolean>(activity, "activityForeground")
+                        report(JSONObject().put("event", "lifecycle-diagnostic").put("point", name)
+                            .put("lifecycle", activity.lifecycle.currentState.name)
+                            .put("foreground", WorkUiFixtures.field<Boolean>(activity, "activityForeground"))
+                            .put("focused", activity.hasWindowFocus()).put("keyguard", keyguard.isKeyguardLocked)
+                            .put("loading", state.loading).put("blocked", state.recoveryBlocked)
+                            .put("boundLens", state.boundLens?.name).put("message", state.message)
+                            .put("resumedActivities", JSONArray(monitor.getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).map { it.javaClass.name }))
+                            .put("transitions", JSONArray(events.toList())))
+                    }
+                }
+                sample("launched")
+                Thread.sleep(3000); sample("idle-without-probes")
+                lateinit var model: CaptureViewModel
+                lateinit var originalWorker: ExecutorService
+                lateinit var originalMain: Handler
+                scenario.onActivity { activity ->
+                    model = ViewModelProvider(activity)[CaptureViewModel::class.java]
+                    val workerField = CaptureViewModel::class.java.getDeclaredField("worker").apply { isAccessible = true }
+                    originalWorker = workerField.get(model) as ExecutorService
+                    workerField.set(model, OwnerProbe(originalWorker))
+                    val mainField = CaptureViewModel::class.java.getDeclaredField("main").apply { isAccessible = true }
+                    originalMain = mainField.get(model) as Handler
+                    mainField.set(model, ModelMainProbe())
+                }
+                Thread.sleep(3000); sample("idle-with-probes")
+                val samples = InstrumentationRegistry.getArguments().getString("diagnosticSamples", "0").toInt().also { require(it in 0..12) }
+                for (index in 0 until samples) {
+                    Thread.sleep(3000); sample("extended-$index")
+                    if (!foregroundObserved) break
+                }
+                scenario.onActivity {
+                    CaptureViewModel::class.java.getDeclaredField("worker").apply { isAccessible = true }.set(model, originalWorker)
+                    CaptureViewModel::class.java.getDeclaredField("main").apply { isAccessible = true }.set(model, originalMain)
+                }
+            }
+        } finally { instrumentation.runOnMainSync { monitor.removeLifecycleCallback(callback) } }
+    }
+
     @Test fun foregroundCaptureAndBrowse() {
         admitted()
         check(context.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED)
@@ -197,6 +254,23 @@ class AppBaselineTest {
         val launch = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         ActivityScenario.launch<MainActivity>(launch).use { scenario ->
+            val holdScreen = InstrumentationRegistry.getArguments().getString("keepScreenAwake") == "true"
+            val holdHandler = Handler(Looper.getMainLooper())
+            var holdActivity: MainActivity? = null
+            scenario.onActivity { holdActivity = it }
+            val hold = object : Runnable {
+                override fun run() {
+                    val activity = holdActivity
+                    if (activity != null && !activity.isDestroyed && !activity.isFinishing &&
+                        activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) &&
+                        !activity.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked) {
+                        activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                    holdHandler.postDelayed(this, 250)
+                }
+            }
+            if (holdScreen) holdHandler.post(hold)
+            try {
             waitFor(scenario) { !it.loading && !it.recoveryBlocked && it.boundLens == it.lens }
             val usable = SystemClock.elapsedRealtime() - start
             lateinit var model: CaptureViewModel
@@ -336,10 +410,22 @@ class AppBaselineTest {
                 .put("sampleWidth", dimensions.outWidth).put("sampleHeight", dimensions.outHeight)
                 .put("missedSlots", outcome.missedSlots).put("processPssKiB", memory.totalPss)
                 .put("sessionId", captureId).put("durationMillis", SystemClock.elapsedRealtime() - start)
+                .put("testWindowKeepScreenOn", holdScreen)
                 .put("limitations", "software shutter-request cadence, not hardware sensor timestamps; first-draw callback not GPU presentation/human UAT; test-only executor/handler wrappers after hydration"))
             val captures = strings(fixture.getJSONArray("captures")).toMutableSet().apply { add(checkNotNull(captureId)) }
             fixture.put("captures", JSONArray(captures.toList()))
             SessionRepository.atomicJson(marker, fixture)
+            } finally {
+                holdHandler.removeCallbacksAndMessages(null)
+                instrumentation.runOnMainSync {
+                    holdActivity?.takeIf { !it.isDestroyed }?.let { activity ->
+                        val state = ViewModelProvider(activity)[CaptureViewModel::class.java].state.value
+                        if (state?.capturing != true && state?.savingPhoto != true && state?.exporting != true)
+                            activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+                holdActivity = null
+            }
         }
     }
 }

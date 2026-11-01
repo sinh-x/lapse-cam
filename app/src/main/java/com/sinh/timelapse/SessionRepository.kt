@@ -48,6 +48,7 @@ internal class SessionRepository(
     private val root = File(filesDirectory.canonicalFile, "sessions")
     private val index = File(filesDirectory.canonicalFile, "session-index.json")
     private var records = linkedMapOf<String, SessionRecord>()
+    /** UI projection generation; includes bounded inventory progress, never deletion authority. */
     var revision: Long = 0; private set
     private val headers = mutableMapOf<String, CaptureSession>()
     private val remainingCache = mutableMapOf<String, Pair<Int, Long>>()
@@ -241,6 +242,7 @@ internal class SessionRepository(
     /** Exact inventory only; progress is durable BEFORE deletion, making missing-after-delete replay safe. */
     private fun deleteInventory(record: SessionRecord): Boolean {
         remainingCache.remove(record.id)
+        revision++ // A cursor/source step changes retained summaries even before the next index commit.
         val session = session(record)
         val directory = session.directory
         val inventory = File(directory, "sources.tsv")

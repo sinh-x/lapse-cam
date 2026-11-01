@@ -4,6 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DisplayAttentionTest {
+    @Test fun immutableSnapshotIsReusedOnlyUntilAnActualTransition() {
+        val owner = DisplayAttention()
+        owner.failure("one", "same")
+        val original = owner.snapshot
+        repeat(1000) { owner.failure("one", "same"); assertSame(original, owner.snapshot) }
+        assertThrows(UnsupportedOperationException::class.java) {
+            (original.details as MutableMap<String, String>)["alien"] = "mutated"
+        }
+        owner.failure("one", "updated")
+        assertNotSame(original, owner.snapshot)
+        assertEquals("same", original.details["one"])
+        assertEquals(1, owner.deliver(true))
+        val delivered = owner.snapshot
+        assertSame(delivered, owner.snapshot)
+        owner.resolve("one")
+        assertEquals(0, owner.snapshot.count)
+        assertEquals(1, delivered.count)
+    }
+
     @Test fun hydrationSeedsOnlySavedBacklogAndDoesNotSwallowNewStartupFailures() {
         val owner = DisplayAttention()
         // An empty loading placeholder is never passed to the repository baseline seam.
