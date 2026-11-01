@@ -3,6 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Explicitly isolated, opt-in profiling package. Never replaces the user's normal app.
+val ttl018Baseline = providers.gradleProperty("ttl018Baseline").orNull?.let {
+    require(it == "true") { "ttl018Baseline accepts only true (or omit the property)" }
+    true
+} ?: false
+
 android {
     namespace = "com.sinh.timelapse"
     compileSdk = 36
@@ -14,8 +20,15 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
     }
     buildTypes {
+        debug {
+            if (ttl018Baseline) {
+                applicationIdSuffix = ".ttl018baseline"
+                manifestPlaceholders["appLabel"] = "TTL-018 Baseline (disposable)"
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
