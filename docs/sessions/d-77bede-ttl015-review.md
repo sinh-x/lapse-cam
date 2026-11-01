@@ -1,5 +1,65 @@
 # TTL-015 review, Pixel validation and PR — d-77bede
 
+## Final motion continuation (supersedes earlier candidate counts/hashes)
+
+After the immersive candidate, Sinh asked about differentiating phone movement
+from stillness and selected **Use motion to control blackout**, followed by
+**Movement wakes; stillness rearms blackout**. Recorded in
+TTL-015/c-20261031140119721. Commit `73fb3d7` preserved the earlier immersive
+candidate; motion is a separately verified continuation on the same feature
+branch, not an implicit change to the signed historical plan/matrix.
+
+- `PhoneMotionPolicy`: gravity-vector low-pass (800ms time constant), significant
+  residual acceleration at 1.5m/s² or angular speed at 0.35rad/s, then 2,000ms
+  quiet hysteresis. Injected monotonic clock; rejects nonfinite samples and resets
+  history between owners. Thresholds are conservative implementation defaults,
+  not calibrated physical guarantees; smooth constant-speed travel can appear
+  still. No camera-scene motion detection or measured power benefit.
+- Foreground Activity registers ordinary-rate accelerometer/gyroscope listeners
+  only during otherwise eligible recording. Modal/focus/error/non-live/disabled
+  preference and teardown unregister and reset. Events predating the current
+  registration are ignored. Missing/denied sensors fall back to timer/tap return.
+- Motion is an eligibility blocker: immediate reveal, no capture command, no
+  rearm during detected motion; quiet starts the full new 30-second delay.
+  Unchanged quiet sensor emissions never reset idle. Existing blackout toggle
+  governs the behavior; no new preference, permission or dependency.
+- Added seven pure motion tests, one display-policy integration case and one
+  Android sensor-lifetime/movement seam. Final fresh offline `--rerun-tasks`
+  command: **112 host tests passed, zero failures/errors/skips; both debug APKs;
+  lint 0 errors / 78 warnings; 76 tasks executed**, 3m03s. All source method
+  names match fresh JUnit XML. **116 Android methods compiled**.
+- Same isolated Pixel package updated; user explicitly authorized another
+  test-only reset. USB disconnected before any reset/test command and was
+  reconnected/revalidated at the owner's request. Final selected run:
+  **17/17 passed**, all 11 BlackoutActivityTest + all 6 PersistenceDefaultsTest
+  methods, 25.942s. No missing/skipped methods in this selected inventory.
+- User reported behavior not working; current foreground package was verified
+  as the **original** app, not the updated test app. User confirmed original/not
+  sure. Opened the labelled test app without replacing original data.
+- Physical pickup check: screenshot first showed immersive blackout. User lifted/
+  tilted without touching the screen and explicitly answered **Camera appeared
+  when I moved it**. Screenshot then showed LIVE/207 photos. After owner confirmed
+  placement flat, waited 35s and observed immersive blackout again. Return still
+  LIVE; separate next tap paused at 492 photos/4m06s. Test session left paused,
+  not automatically resumed/exported/deleted. These are selected observations,
+  not full sustained-motion/threshold/device UAT.
+
+| Final motion APK | SHA-256 |
+|---|---|
+| Normal app | `97d07d68fa9026f25b70d225f07be21aa32c2fd9e7e429bf9c2dc4ef4fa62bb4` |
+| Normal Android tests | `72f1c3b03a59e06558f8747b479a431bc6d68d042e8c652404e725e4370d95bb` |
+| Isolated Pixel app | `9ea6d6b851c4f8fe04dd2d0aacb08c7a7c26fe9485ab980628497c249fc1fe92` |
+| Isolated Pixel tests | `207f47030c8cac4928b11f4599ef2cfe75b2149175f29392c9af3fc436ea3e52` |
+
+Complete main/Android-test Kotlin sources were compared byte-for-byte with the
+isolated build. Only app ID/label differ; device evidence is not normal-package
+APK execution. Final evidence uses `motion-*`/`pixel-motion-tests.txt`; previous
+failures/evidence remain retained. OPPO, full 116-method Android execution,
+independent review and complete both-phone human UAT remain missing. No merge
+or full acceptance is inferred from selected device success.
+
+## Historical immersive candidate evidence (before motion continuation)
+
 ## Candidate and decisions
 
 - Branch: `feature/TTL-015-blackout-recording`.

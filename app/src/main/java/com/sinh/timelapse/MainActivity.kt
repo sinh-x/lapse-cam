@@ -7,6 +7,10 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -101,6 +105,25 @@ class MainActivity : ComponentActivity() {
     private var activityFocused = false
     private var activityDestroyed = false
     private val blackout = BlackoutPolicy { android.os.SystemClock.elapsedRealtime() }
+    private val phoneMotion = PhoneMotionPolicy { android.os.SystemClock.elapsedRealtime() }
+    private val motionSensors by lazy { getSystemService(SensorManager::class.java) }
+    private var motionMonitoring = false
+    private var motionSensorStartedAt = 0L
+    private var phoneMoving = false
+    private val motionListener = object : SensorEventListener {
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        override fun onSensorChanged(event: SensorEvent) {
+            if (!motionMonitoring || activityDestroyed || event.timestamp < motionSensorStartedAt) return
+            when (event.sensor.type) {
+                Sensor.TYPE_ACCELEROMETER -> phoneMotion.acceleration(event.values[0], event.values[1], event.values[2])
+                Sensor.TYPE_GYROSCOPE -> phoneMotion.rotation(event.values[0], event.values[1], event.values[2])
+            }
+            if (phoneMoving != phoneMotion.moving) {
+                phoneMoving = phoneMotion.moving
+                updateBlackout()
+            }
+        }
+    }
     private lateinit var cameraUi: ViewGroup
     private lateinit var blackoutCover: FrameLayout
     private lateinit var blackoutBanner: TextView
@@ -400,13 +423,34 @@ class MainActivity : ComponentActivity() {
         dialog.show()
     }
 
+    private fun updateMotionSensors(enabled: Boolean) {
+        if (motionMonitoring == enabled) return
+        motionMonitoring = enabled
+        motionSensors.unregisterListener(motionListener)
+        phoneMotion.reset(); phoneMoving = false
+        if (enabled) {
+            motionSensorStartedAt = android.os.SystemClock.elapsedRealtimeNanos()
+            // Ordinary foreground rate only; no high-rate/background sensor permission.
+            // Missing or denied sensors leave the existing timer/tap behavior available.
+            for (type in listOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE)) {
+                val sensor = motionSensors.getDefaultSensor(type) ?: continue
+                try { motionSensors.registerListener(motionListener, sensor, SensorManager.SENSOR_DELAY_UI, handler) }
+                catch (_: RuntimeException) { /* Best-effort optional motion signal. */ }
+            }
+        }
+    }
+
     private fun updateBlackout() {
         if (!::blackoutCover.isInitialized || activityDestroyed) return
+        val modal = modalDepth > 0 || downloadPickerPending
+        val error = blackoutError || work.state.value?.error != null ||
+            model.sessions.value.orEmpty().any { it.canRetry || it.error.isNotEmpty() }
+        updateMotionSensors(defaults.blackoutEnabled && blackoutLive && blackoutCameraReady &&
+            activityForeground && activityFocused && !modal && !error)
         blackout.update(BlackoutPolicy.Input(
             enabled = defaults.blackoutEnabled, live = blackoutLive, cameraReady = blackoutCameraReady,
             foreground = activityForeground, focused = activityFocused,
-            modal = modalDepth > 0 || downloadPickerPending,
-            actionableError = blackoutError || work.state.value?.error != null || model.sessions.value.orEmpty().any { it.canRetry || it.error.isNotEmpty() },
+            modal = modal, actionableError = error, moving = phoneMoving,
             // A return gesture keeps an existing cover until completion. If a real error
             // removes it first, held input still blocks rearming. Consumption markers survive
             // focus loss to swallow orphaned UP events, but are not indefinitely held input.
@@ -749,7 +793,7 @@ class MainActivity : ComponentActivity() {
         invalidateCamera(); model.setForeground(false); handler.removeCallbacks(clockTick); super.onStop()
     }
     override fun onDestroy() {
-        activityDestroyed = true; blackout.close(); renderBlackout()
+        activityDestroyed = true; updateMotionSensors(false); blackout.close(); renderBlackout()
         sheet?.dismiss(); workDialog?.dismiss(); super.onDestroy()
     }
     private companion object {

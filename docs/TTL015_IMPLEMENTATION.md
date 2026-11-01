@@ -10,13 +10,24 @@ OS privacy indicators and transient edge-swipe bars remain Android-controlled.
 This supersedes r001's retain-visible-bars design, explicitly selected by Sinh
 and recorded in TTL-015/c-20261031134043603; signed historical plan bytes are unchanged.
 
-Final fresh offline checks: **104 host tests passed, both debug APKs built,
-lint 0 errors / 78 warnings**, all 76 tasks executed. **115 Android methods
-compiled; 16 selected tests executed and passed** on Pixel 8 Pro/API37/build
-2026102101 in the owner-approved separate disposable test package. A real rear
-Adaptive capture verified immersive appearance, return without pausing, next-tap
-Pause and a 73-frame export; sampled JPEG/MP4 images contain no cover/banner.
-This is selected device/builder evidence, not full UAT or independent review.
+Sinh subsequently selected **movement wakes; stillness rearms blackout**, recorded
+in TTL-015/c-20261031140119721. Foreground accelerometer/gyroscope samples detect
+significant movement; small vibrations are filtered. Motion reveals without
+pausing capture and blocks blackout until 2 seconds quiet, then a fresh 30-second
+idle interval. Sensors unregister/reset on loss of eligibility/teardown, stale
+samples are rejected and unavailable sensors retain timer/tap behavior. Inertial
+motion is best-effort, not scene motion, absolute position or constant-velocity
+travel detection; no battery/power improvement is measured.
+
+Final fresh offline checks: **112 host tests passed, both debug APKs built,
+lint 0 errors / 78 warnings**, all 76 tasks executed. **116 Android methods
+compiled; 17 selected tests executed and passed** on Pixel 8 Pro/API37/build
+2026102101 in the owner-approved separate disposable test package. Owner physically
+confirmed pickup revealed Camera; screenshots show recording still LIVE and
+blackout returning after placement/idle, then deliberate Pause. Earlier immersive
+rear Adaptive capture verified a 73-frame export; sampled JPEG/MP4 images contain
+no cover/banner. This is selected device/builder evidence, not full UAT or
+independent review.
 Current hashes, failures/repairs and remaining coverage are recorded in the
 [continuation evidence](sessions/d-77bede-ttl015-review.md).
 

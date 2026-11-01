@@ -40,7 +40,7 @@ class BlackoutPolicyTest {
         val values = Fixture().live.let { live -> listOf(
             live.copy(enabled = false), live.copy(live = false), live.copy(cameraReady = false),
             live.copy(foreground = false), live.copy(focused = false), live.copy(modal = true),
-            live.copy(actionableError = true), live.copy(interacting = true),
+            live.copy(actionableError = true), live.copy(interacting = true), live.copy(moving = true),
         ) }
         for (value in values) {
             val f = Fixture(); val stale = f.policy.timer!!; f.cover()
@@ -90,6 +90,18 @@ class BlackoutPolicyTest {
         f.policy.observeTerminals(setOf("old:ended", "new:expiry:60000")); assertEquals(restarted, f.policy.timer)
         f.policy.observeTerminals(emptySet())
         f.policy.observeTerminals(setOf("new:expiry:60000")); assertEquals(restarted, f.policy.timer)
+    }
+
+    @Test fun movementRevealsAndContinuousMotionBlocksUntilStillnessPlusFullIdle() {
+        val f = Fixture(); f.cover()
+        f.policy.update(f.live.copy(moving = true))
+        assertFalse(f.policy.covered); assertNull(f.policy.timer)
+        f.time += 120_000; f.policy.update(f.live.copy(moving = true))
+        assertNull(f.policy.timer)
+        f.policy.update(f.live); val timer = f.policy.timer!!
+        assertEquals(f.time + 30_000, timer.deadline)
+        f.time += 29_999; f.fire(); assertFalse(f.policy.covered)
+        f.time++; f.fire(); assertTrue(f.policy.covered)
     }
 
     @Test fun stopDestroyRecreationAndQueuedCallbacksNeverRestoreOldOwner() {

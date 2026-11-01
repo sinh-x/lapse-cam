@@ -11,9 +11,10 @@ internal class BlackoutPolicy(private val now: () -> Long) {
         val modal: Boolean = false,
         val actionableError: Boolean = false,
         val interacting: Boolean = false,
+        val moving: Boolean = false,
     ) {
         val eligible: Boolean get() = enabled && live && cameraReady && foreground && focused &&
-            !modal && !actionableError && !interacting
+            !modal && !actionableError && !interacting && !moving
     }
     data class Timer(val generation: Long, val deadline: Long)
 

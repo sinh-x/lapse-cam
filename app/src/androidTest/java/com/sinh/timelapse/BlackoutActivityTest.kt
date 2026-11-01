@@ -249,6 +249,37 @@ class BlackoutActivityTest {
         } }
     }
 
+    @Test fun motionRevealsWithoutCaptureActionAndSensorsStopWithFocusOrPreference() {
+        WorkUiFixtures.emptyActivity().use { scenario -> scenario.onActivity { activity ->
+            val f = fixture(activity)
+            val model = ViewModelProvider(activity)[CaptureViewModel::class.java]
+            val before = model.state.value!!.capturing
+            f.show()
+            set(activity, "phoneMoving", true); call(activity, "updateBlackout")
+            assertEquals(View.GONE, f.cover.visibility); assertNull(f.policy.timer)
+            assertEquals(before, model.state.value!!.capturing)
+            f.now += 90_000; call(activity, "updateBlackout"); assertNull(f.policy.timer)
+            set(activity, "phoneMoving", false); call(activity, "updateBlackout")
+            assertEquals(f.now + 30_000, f.policy.timer!!.deadline)
+            assertTrue(WorkUiFixtures.field<Boolean>(activity, "motionMonitoring"))
+            activity.onWindowFocusChanged(false)
+            assertFalse(WorkUiFixtures.field<Boolean>(activity, "motionMonitoring"))
+            assertFalse(WorkUiFixtures.field<Boolean>(activity, "phoneMoving"))
+            assertNull(f.policy.timer)
+            activity.onWindowFocusChanged(true)
+            assertEquals(f.now + 30_000, f.policy.timer!!.deadline)
+            val toggle = WorkUiFixtures.field<CheckBox>(activity, "blackoutToggle")
+            try {
+                toggle.isChecked = false
+                assertFalse(WorkUiFixtures.field<Boolean>(activity, "motionMonitoring"))
+                assertNull(f.policy.timer)
+            } finally {
+                // Remove only the display key created by this admitted empty-context fixture.
+                assertTrue(activity.getSharedPreferences("capture-defaults", 0).edit().remove("blackoutEnabled").commit())
+            }
+        } }
+    }
+
     @Test fun nonLiveReadinessErrorAndPickerTransitionsClearAndRestart() {
         WorkUiFixtures.emptyActivity().use { scenario -> scenario.onActivity { activity ->
             val f = fixture(activity)
