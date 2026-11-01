@@ -14,6 +14,30 @@ class HistoryProjectionTest {
         WorkSession(id, epoch(saved), id, WorkType.WORK.key, 25,
             start = start?.let { WorkMoment("boot", 0, epoch(it)) })
 
+    @Test fun localDayCacheMatchesDirectConversionAcrossOffsetAndDateLineTransitions() {
+        val centers = listOf("2026-11-01T05:00:00Z", "2026-03-08T07:00:00Z", "2011-12-30T10:00:00Z", "1867-10-18T00:00:00Z")
+        for (name in listOf("UTC", "America/New_York", "Europe/Berlin", "Pacific/Apia", "America/Adak")) {
+            val selectedZone = ZoneId.of(name)
+            val resolver = HistoryLocalDay(selectedZone)
+            val instants = centers.flatMap { value ->
+                val center = Instant.parse(value).toEpochMilli()
+                (-96..96).map { center + it * 1_800_000L }
+            }.shuffled(kotlin.random.Random(18))
+            instants.forEach { value ->
+                assertEquals("$name $value", Instant.ofEpochMilli(value).atZone(selectedZone).toLocalDate(), resolver.date(value))
+            }
+        }
+    }
+    @Test fun ordinaryDayConvertsOnceAndExtremeEpochBoundsRemainCompatible() {
+        val resolver = HistoryLocalDay(ZoneId.of("UTC"))
+        val base = Instant.parse("2026-11-01T12:00:00Z").toEpochMilli()
+        repeat(10000) { assertEquals(today, resolver.date(base + it)) }
+        assertEquals(1, resolver.conversions)
+        listOf(Long.MIN_VALUE, Long.MAX_VALUE).forEach { value ->
+            assertEquals(Instant.ofEpochMilli(value).atZone(ZoneId.of("UTC")).toLocalDate(), resolver.date(value))
+        }
+    }
+
     @Test fun sessionsDeduplicateOrderAndKeepTodayEmpty() {
         val old = today.minusDays(1)
         val result = SessionHistory.project(listOf(review("b", old), review("a", old), review("a", old)), today, zone)

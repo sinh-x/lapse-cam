@@ -4,6 +4,36 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
+/** Resolve sorted history instants with one conversion per ordinary local day.
+ * Any day containing an offset transition uses the direct path (including historic date-line shifts).
+ */
+internal class HistoryLocalDay(private val zone: ZoneId) {
+    private var cached: LocalDate? = null
+    private var lower = 0L
+    private var upper = 0L
+    internal var conversions = 0; private set
+    fun date(epochMillis: Long): LocalDate {
+        cached?.takeIf { epochMillis >= lower && epochMillis < upper }?.let { return it }
+        conversions++
+        val date = Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate()
+        cached = null
+        try {
+            val begin = date.atStartOfDay(zone).toInstant()
+            val end = date.plusDays(1).atStartOfDay(zone).toInstant()
+            val transition = zone.rules.nextTransition(begin.minusNanos(1))
+            if (transition == null || !transition.instant.isBefore(end)) {
+                val low = begin.toEpochMilli(); val high = end.toEpochMilli()
+                if (epochMillis >= low && epochMillis < high) { lower = low; upper = high; cached = date }
+            }
+        } catch (_: ArithmeticException) {
+            // Extreme Long timestamps remain valid direct projections when day bounds overflow millis.
+        } catch (_: java.time.DateTimeException) {
+            // A date with unrepresentable boundary data is never memoized.
+        }
+        return date
+    }
+}
+
 /** Compact, pure projections: never read media, start work or change stored order. */
 data class HistoryDay<T>(val date: LocalDate, val items: List<T>)
 data class SessionHistory(val today: HistoryDay<SessionReview>, val dates: List<HistoryDay<SessionReview>>) {
@@ -11,7 +41,8 @@ data class SessionHistory(val today: HistoryDay<SessionReview>, val dates: List<
         fun project(values: List<SessionReview>, today: LocalDate, zone: ZoneId, attention: Boolean = false): SessionHistory {
             val unique = values.sortedWith(compareByDescending<SessionReview> { it.startedAt }.thenBy { it.id })
                 .distinctBy { it.id }.filter { !attention || it.needsAttention }
-            val groups = unique.groupBy { Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() }
+            val resolver = HistoryLocalDay(zone)
+            val groups = unique.groupBy { resolver.date(it.startedAt) }
             return SessionHistory(HistoryDay(today, groups[today].orEmpty()), groups.keys.filter { it != today }
                 .sortedDescending().map { HistoryDay(it, groups.getValue(it)) })
         }
@@ -32,7 +63,10 @@ data class TimeboxHistory(val unstarted: List<WorkSession>, val today: List<Work
                     WorkSort.TYPE -> compareBy<WorkSession> { WorkType.fromKey(it.type).ordinal }.then(newest)
                 })
             }
-            val groups = matching.filter { it.start != null }.groupBy { Instant.ofEpochMilli(it.start!!.epoch).atZone(zone).toLocalDate() }
+            val resolver = HistoryLocalDay(zone)
+            // Grouping order is independent of row sort; date-contiguous input avoids repeated zone conversion.
+            val groups = matching.filter { it.start != null }.sortedByDescending { it.start!!.epoch }
+                .groupBy { resolver.date(it.start!!.epoch) }
             return TimeboxHistory(ordered(matching.filter { it.start == null }, true), ordered(groups[today].orEmpty(), false),
                 groups.keys.filter { it != today }.sortedDescending().map { HistoryDay(it, ordered(groups.getValue(it), false)) })
         }

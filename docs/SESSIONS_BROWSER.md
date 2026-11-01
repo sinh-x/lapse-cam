@@ -26,6 +26,10 @@ Back from Sessions details returns to its originating ordinary/attention list,
 then Camera. Saved-instance state retains selected identity, expanded dates,
 list positions, Timeboxes filters/sort and destination stack order. Refreshing
 phone date/timezone recomputes date projections without changing record IDs.
+Date-contiguous history reuses local-day bounds rather than converting every
+instant separately. Any day containing an offset transition falls back to direct
+conversion, including historical date-line shifts; extreme epoch bounds also use
+the direct path. This is metadata projection only, not a stored-date migration.
 Incoming `sessionId` or `sessionsAttention=true` Intent extras select a useful
 Sessions destination; stale IDs explain unavailability. These routes are not
 Android notification/PendingIntent delivery evidence.
