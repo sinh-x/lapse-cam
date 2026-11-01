@@ -54,6 +54,9 @@ class CaptureViewModel @JvmOverloads constructor(
         val exporting: Boolean = false,
         val progress: Int = 0,
         val message: String = "Loading saved session…",
+        val messageImpact: CaptureMessageImpact = CaptureMessageImpact.ROUTINE,
+        val queueSafetyBlocked: Boolean = false,
+        val sessionSafetyBlocked: Boolean = false,
         val video: Uri? = null,
         val switching: Boolean = false,
     ) {
@@ -62,6 +65,8 @@ class CaptureViewModel @JvmOverloads constructor(
         val canSelectLens: Boolean get() = CapturePolicy.canSelectLens(session != null, busy, recoveryBlocked)
     }
 
+    internal val attention = DisplayAttention()
+    private var attentionHydrated = false // Only completed repository recovery seeds saved backlog.
     private val mutableState = MutableLiveData(State())
     val state: LiveData<State> = mutableState
     private val current: State get() = checkNotNull(mutableState.value)
@@ -121,8 +126,20 @@ class CaptureViewModel @JvmOverloads constructor(
                         catch (error: Exception) { repository.put(repository.get(it.id).copy(error = error.message ?: "Delete failed")) }
                     }
                     publishSessions()
+                    post {
+                        attention.resolve("queue")
+                        if (current.queueSafetyBlocked) update(current.copy(queueSafetyBlocked = false,
+                            messageImpact = if (current.messageImpact == CaptureMessageImpact.UNKNOWN)
+                                CaptureMessageImpact.INDEPENDENT else current.messageImpact))
+                    }
                 }
-                catch (error: Exception) { post { update(current.copy(message = "Session queue needs attention: ${error.message}. Photos retained.")) } }
+                catch (error: Exception) { post {
+                    // This boundary includes shared index writes/readback. Independence is not
+                    // proven on an exception; block display until a complete successful pass.
+                    val detail = "Session queue needs attention: ${error.message}. Photos retained."
+                    attention.failure("queue", detail)
+                    update(current.copy(message = detail, messageImpact = CaptureMessageImpact.UNKNOWN, queueSafetyBlocked = true))
+                } }
             }
             main.postDelayed(this, 1_000)
         }
@@ -158,6 +175,12 @@ class CaptureViewModel @JvmOverloads constructor(
                 check(exportQueue?.idle != false) { "Wait for the bounded export/cleanup step to finish before recovery" }
                 exportQueue?.stopAdmission()
                 repository.recover()
+                val recoveredRecords = repository.records()
+                post {
+                    val unsafe = SessionAttentionPolicy.observe(attention, recoveredRecords, baseline = !attentionHydrated)
+                    attentionHydrated = true
+                    update(current.copy(sessionSafetyBlocked = unsafe))
+                }
                 manualReviews.clear()
                 store.directories().filter { directory -> repository.records().none { it.id == directory.name } }.forEach { directory ->
                     val saved = store.load(directory, false)
@@ -180,14 +203,18 @@ class CaptureViewModel @JvmOverloads constructor(
                 post {
                     update(current.copy(loading = false, recoveryBlocked = false, session = session,
                         selectedLens = session?.lens ?: current.selectedLens, frames = frames, video = video,
+                        messageImpact = CaptureMessageImpact.ROUTINE,
                         message = if (session == null) "Ready. Choose an interval, then start capture."
                         else "Saved session recovered. Resume capture or export."))
                     if (snapshot != null) {
                         activeClock.restore(snapshot.activeMillis ?: 0)
                         applySnapshot(snapshot)
                     }
-                    if (exportRecoveryError != null) update(current.copy(
-                        message = "Export recovery needs attention: ${exportRecoveryError.message}. Outputs retained; Export retries recovery."))
+                    if (exportRecoveryError != null) {
+                        val detail = "Export recovery needs attention: ${exportRecoveryError.message}. Outputs retained; Export retries recovery."
+                        attention.failure("export-recovery", detail)
+                        update(current.copy(message = detail, messageImpact = CaptureMessageImpact.INDEPENDENT))
+                    } else attention.resolve("export-recovery")
                 }
             } catch (error: Exception) {
                 post {
@@ -269,7 +296,8 @@ class CaptureViewModel @JvmOverloads constructor(
             }
         }
         workSpan = runCatching { workContext?.let { it.captureStarted(checkNotNull(current.session).directory.name, it.now()) } }.getOrNull()
-        update(current.copy(capturing = true, message = "Capturing. Keep the app open and phone steady."))
+        update(current.copy(capturing = true, messageImpact = CaptureMessageImpact.ROUTINE,
+            message = "Capturing. Keep the app open and phone steady."))
         capturePhoto()
     }
 
@@ -536,6 +564,8 @@ class CaptureViewModel @JvmOverloads constructor(
                 verifiedOperation = record.operation.takeIf { record.receipt != null && record.output != null })
         }
         post {
+            val unsafe = SessionAttentionPolicy.observe(attention, records)
+            update(current.copy(sessionSafetyBlocked = unsafe))
             mutableSessions.value = reviews.map { review ->
                 if (review.id == current.session?.directory?.name) review.copy(
                     status = if (current.capturing) "Active" else if (current.switching) "Closing" else "Paused",
@@ -550,11 +580,17 @@ class CaptureViewModel @JvmOverloads constructor(
         worker.execute {
             try {
                 val record = repository.get(id)
+                // Explicit user cycle, not an automatic queue attempt. Its next failure may notify.
+                post { attention.resolve(SessionAttentionPolicy.key(record)); attention.resolve("retry:$id") }
                 if (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()) repository.put(record.copy(error = ""))
                 else exportQueue?.retry(id)
                 publishSessions()
             }
-            catch (error: Exception) { post { update(current.copy(message = "Retry: ${error.message}")) } }
+            catch (error: Exception) { post {
+                val detail = "Retry: ${error.message}"
+                attention.failure("retry:$id", detail)
+                update(current.copy(message = detail, messageImpact = CaptureMessageImpact.UNKNOWN, queueSafetyBlocked = true))
+            } }
         }
     }
 
@@ -562,10 +598,12 @@ class CaptureViewModel @JvmOverloads constructor(
         val selectedCurrent = current.session?.takeIf { it.directory.name == id }
         if (selectedCurrent != null && (current.busy || current.capturing || current.switching || current.recoveryBlocked)) return
         if (selectedCurrent != null) update(current.copy(working = true))
+        attention.resolve("delete:$id")
         worker.execute {
             try {
                 check(foreground) { "Open the app to delete sources" }
                 val existing = repository.records().firstOrNull { it.id == id }
+                existing?.let { record -> post { attention.resolve(SessionAttentionPolicy.key(record, SessionAttentionPolicy.Category.DELETE)) } }
                 if (existing == null) {
                     val session = selectedCurrent ?: store.load(File(filesDirectory.canonicalFile, "sessions/$id"))
                     check(manualReviews.containsKey(id)) { "Unknown saved session" }
@@ -592,8 +630,12 @@ class CaptureViewModel @JvmOverloads constructor(
                         activeClock.restore(0)
                         update(current.copy(session = null, frames = 0, selectedFrames = 0, savedBytes = 0, activeMillis = null))
                     }
+                    val detail = "Delete stopped: ${error.message}. Remaining sources retained."
+                    attention.failure(if (record?.phase == SessionPhase.DELETING) SessionAttentionPolicy.key(record) else "delete:$id", detail)
+                    // Includes shared-index/store failures, so remain conservative until the
+                    // next successful queue pass. Ordinary per-record delete errors are notices.
                     update(current.copy(working = if (selectedCurrent != null) false else current.working,
-                        message = "Delete stopped: ${error.message}. Remaining sources retained."))
+                        message = detail, messageImpact = CaptureMessageImpact.UNKNOWN, queueSafetyBlocked = true))
                 }
                 publishSessions()
             }
@@ -620,7 +662,8 @@ class CaptureViewModel @JvmOverloads constructor(
         stop()
         main.removeCallbacks(nextCapture)
         update(current.copy(loading = false, working = false, savingPhoto = photoInFlight,
-            capturing = false, exporting = false, recoveryBlocked = current.recoveryBlocked || blockRecovery, message = "Error: ${error.message ?: error.javaClass.simpleName}. Saved photos are kept."))
+            capturing = false, exporting = false, recoveryBlocked = current.recoveryBlocked || blockRecovery,
+            messageImpact = CaptureMessageImpact.CAPTURE_SAFETY, message = "Error: ${error.message ?: error.javaClass.simpleName}. Saved photos are kept."))
         if (!blockRecovery) drainClose()
     }
 
