@@ -48,6 +48,7 @@ internal class SessionRepository(
     private val root = File(filesDirectory.canonicalFile, "sessions")
     private val index = File(filesDirectory.canonicalFile, "session-index.json")
     private var records = linkedMapOf<String, SessionRecord>()
+    var revision: Long = 0; private set
     private val headers = mutableMapOf<String, CaptureSession>()
     private val remainingCache = mutableMapOf<String, Pair<Int, Long>>()
     fun records(): List<SessionRecord> = records.values.toList()
@@ -70,7 +71,7 @@ internal class SessionRepository(
         atomicJson(index, JSONObject().put("version", 1).put("records", JSONArray().also { array ->
             next.values.forEach { array.put(encode(it)) }
         }))
-        records = next
+        records = next; revision++
         checkpoint("index")
     }
 
@@ -87,7 +88,7 @@ internal class SessionRepository(
                 val record = decode(array.getJSONObject(i))
                 check(loaded.put(record.id, record) == null) { "Duplicate session identity" }
             }
-            records = loaded
+            records = loaded; revision++
         }
         val successorIds = records.values.mapNotNull { it.successor }.toSet()
         // A crash after header publication but before initial registration adopts only explicit opt-in.

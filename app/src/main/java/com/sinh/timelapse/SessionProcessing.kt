@@ -2,7 +2,7 @@ package com.sinh.timelapse
 
 /** Sampling stage is intentionally NOT a processing stage. Legacy failure provenance stays unknown. */
 enum class ProcessingStage(val label: String) {
-    EXPORTING("Exporting"), VERIFYING("Verifying video"), CLEANUP("Cleaning up sources"),
+    EXPORTING("Exporting"), PUBLISHING("Publishing video"), VERIFYING("Verifying video"), CLEANUP("Cleaning up sources"),
     DELETING("Deleting sources"), UNKNOWN("Stage unknown")
 }
 enum class ProcessingWait { NONE, QUEUED, RETRY_DELAY, FOREGROUND }

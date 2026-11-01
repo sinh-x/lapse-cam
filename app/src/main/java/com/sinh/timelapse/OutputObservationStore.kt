@@ -8,6 +8,7 @@ import java.io.File
 internal class OutputObservationStore(files: File) {
     private val target = File(files.canonicalFile, "output-observations.json")
     private var loaded = false
+    var revision: Long = 0; private set
     private var blocked: Exception? = null
     private var values = linkedMapOf<String, OutputObservation>()
     fun load() {
@@ -50,7 +51,7 @@ internal class OutputObservationStore(files: File) {
             .put("lastAttemptDiagnostic", value.lastAttemptDiagnostic)) }
         try { SessionRepository.atomicJson(target, JSONObject().put("version", 1).put("observations", array)) }
         catch (error: Exception) { blocked = error; throw error }
-        values = next
+        values = next; revision++
         return true
     }
 }

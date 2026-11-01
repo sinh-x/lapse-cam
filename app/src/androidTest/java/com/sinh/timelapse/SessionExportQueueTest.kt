@@ -46,6 +46,33 @@ class SessionExportQueueTest {
         VideoExporter.PublishedVerification(uri ?: Uri.parse("content://fixture/$operation"), "0".repeat(64), count, session.fps,
             (session.configuration as SamplingConfiguration.Adaptive).maxSeconds)
 
+    @Test fun typedActivityUsesActualStagesAndRejectsLateProgress() = fixture { context, root, store, repo ->
+        val session = closed(store, repo)
+        val media = Pending()
+        val seen = mutableListOf<ActiveProcessing?>()
+        var late: ((Int) -> Unit)? = null
+        lateinit var queue: SessionExportQueue
+        queue = SessionExportQueue(direct, media, repo, VideoExporter(context, root, root), { Long.MAX_VALUE },
+            { _, _ -> seen.add(queue.active) }, encode = { _, _, operation, progress ->
+                late = progress; progress(100); Uri.parse("content://fixture/$operation")
+            }, verify = { value, operation, uri, count ->
+                assertEquals(ProcessingStage.VERIFYING, queue.active!!.stage)
+                assertNull(queue.active!!.percent)
+                proof(value, operation, uri, count)
+            }, find = { null })
+        queue.setOpen(true, 0)
+        assertEquals(ProcessingStage.EXPORTING, queue.active!!.stage)
+        while (media.tasks.isNotEmpty()) media.runNext()
+        assertEquals(SessionPhase.FINISHED, repo.get(session.directory.name).phase)
+        assertNull(queue.active)
+        assertTrue(seen.any { it?.stage == ProcessingStage.CLEANUP })
+        assertTrue(seen.any { it?.stage == ProcessingStage.EXPORTING && it.percent == 100 })
+        val updates = seen.size
+        late!!(90)
+        assertEquals(updates, seen.size)
+        assertNull(queue.active)
+    }
+
     @Test fun encodingNeverBlocksSuccessorSavesAndOnlyOneExportRuns() = fixture { context, root, store, repo ->
         val old = closed(store, repo)
         val media = Pending()

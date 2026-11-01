@@ -74,6 +74,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var sessionsButton: Button
     private lateinit var workButton: Button
     private lateinit var attentionNotice: TextView
+    private lateinit var processingStatus: TextView
+    private var lastAssociationHints: List<Triple<String, String, String?>>? = null
+    private var associationReady = false
+    private var lastWorkRecords: List<WorkSession>? = null
     private var sessionAttentionDetails: TextView? = null
     private var sessionsView: SessionsView? = null
     private var sessionsDialog: SessionsDialog? = null
@@ -196,17 +200,22 @@ class MainActivity : ComponentActivity() {
             renderCapture(state); bindCamera()
             sessionsView?.loading(!state.loading && !state.recoveryBlocked,
                 if (state.recoveryBlocked) "Session metadata unavailable. Retained data; see diagnostics and recovery on Camera." else "Loading saved sessions…")
-            if (!state.loading && !state.recoveryBlocked) sync.backfillAssociations(model.sessions.value.orEmpty())
+            val ready = !state.loading && !state.recoveryBlocked
+            if (ready && !associationReady) requestAssociationBackfill(model.sessions.value.orEmpty())
+            associationReady = ready
+            renderProcessing()
         }
         model.sessions.observe(this) { sessions ->
             sessionsView?.render(sessions)
-            if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) sync.backfillAssociations(sessions)
+            if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) requestAssociationBackfill(sessions)
+            renderProcessing()
             backlog.text = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size,
                 sessions.sumOf { it.bytes } / 1048576.0, sessions.distinctBy { it.id }.count { it.needsAttention })
             renderWork()
         }
         work.state.observe(this) { renderWork(); sessionsView?.render(model.sessions.value.orEmpty()) }
         model.outputReviewError.observe(this) { sessionsView?.evidenceUnavailable(it != null); renderAttentionDestinations() }
+        model.processing.observe(this) { renderProcessing() }
         sync.state.observe(this) { sharedView?.render(it) }
         downloadVideo = savedInstanceState?.getString("syncDownloadVideo")?.let { org.json.JSONObject(it) }
         downloadMobileConsent = savedInstanceState?.getBoolean("syncDownloadMobile") ?: false
@@ -394,7 +403,9 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { if (hasCameraPermission()) { invalidateCamera(); bindCamera() } else requestCamera.launch(Manifest.permission.CAMERA) }
         }
         recovery = Button(this).apply { text = "Retry saved session recovery"; visibility = View.GONE; setOnClickListener { model.retryRecovery() } }
+        processingStatus = label("Loading media processing status…", 13f)
         root.addView(permission); root.addView(recovery); root.addView(status); root.addView(attentionNotice); root.addView(summary)
+        root.addView(processingStatus)
         capture = Button(this).apply {
             text = "Start capture"; minHeight = dp(72); minWidth = dp(72); textSize = 12f
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(255, 205, 205)) }
@@ -741,10 +752,34 @@ class MainActivity : ComponentActivity() {
         workRemaining.visibility = if (workRemaining.text.isEmpty()) View.GONE else View.VISIBLE
         workEnd.visibility = if (running == null) View.GONE else View.VISIBLE; workEnd.isEnabled = state.loaded
         workView?.render(state)
-        if (state.loaded) blackout.observeTerminals(state.snapshot.records.filter { it.state == WorkState.ENDED }
-            .map { "${it.id}:${it.reason}:${it.endElapsed}" }.toSet())
+        if (state.loaded && lastWorkRecords !== state.snapshot.records) {
+            lastWorkRecords = state.snapshot.records
+            blackout.observeTerminals(state.snapshot.records.filter { it.state == WorkState.ENDED }
+                .map { "${it.id}:${it.reason}:${it.endElapsed}" }.toSet())
+        }
         updateBlackout()
         if (state.loaded && pendingWorkId != null) { val id = pendingWorkId; pendingWorkId = null; showWork(id) }
+    }
+    private fun requestAssociationBackfill(values: List<SessionReview>) {
+        val hints = values.mapNotNull { review -> review.output?.let { Triple(review.id, it, review.verifiedOperation) } }
+        if (hints != lastAssociationHints) { lastAssociationHints = hints; sync.backfillAssociations(values) }
+    }
+    private fun renderProcessing() {
+        if (!::processingStatus.isInitialized) return
+        val active = model.processing.value.orEmpty()
+        val values = model.sessions.value.orEmpty()
+        val text = if (model.state.value?.loading != false) "Loading media processing status…"
+            else if (model.state.value?.recoveryBlocked == true) "Media status unavailable; saved data retained"
+            else if (active.isNotEmpty()) active.joinToString("\n") {
+                "${it.stage.label} · ${it.sessionId}${it.percent?.let { p -> " · $p%" } ?: " · in progress (indeterminate)"}"
+            } else if (values.any { it.processing.wait == ProcessingWait.RETRY_DELAY }) "Media processing waiting for automatic retry"
+            else if (values.any { it.processing.wait != ProcessingWait.NONE }) "Media processing queued / waiting"
+            else if (values.any { it.needsAttention }) "Media idle · Sessions needs attention"
+            else "Media processing idle · see Sessions for completed work"
+        if (processingStatus.text.toString() != text) processingStatus.text = text
+        if (model.state.value?.exporting == true) export.text = active.firstOrNull()?.let {
+            "${it.stage.label}${it.percent?.let { p -> " $p%" } ?: "…"}"
+        } ?: "Export finishing…"
     }
     private fun showSessions() {
         if (sessionsView != null) return

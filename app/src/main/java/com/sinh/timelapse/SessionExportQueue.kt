@@ -23,6 +23,20 @@ internal class SessionExportQueue(
     private var clockOpen = false
     private var lastTick: Long? = null
     private var running: String? = null
+    var active: ActiveProcessing? = null; private set
+    private data class Progress(val id: String, val operation: String, val value: Int)
+    private val progressUpdates = LatestUpdate<Progress>(owner) { update ->
+        val current = active
+        if (running == update.id && current?.operation == update.operation && current.stage == ProcessingStage.EXPORTING &&
+            update.value >= (current.percent ?: 0)) {
+            active = current.copy(percent = update.value.coerceIn(0, 100)); notifyChanged(running, update.value)
+        }
+    }
+    fun reportStage(stage: ProcessingStage, operation: String? = active?.operation) {
+        active?.takeIf { it.operation == operation }?.let {
+            active = it.copy(stage = stage, percent = null); notifyChanged(running, 0)
+        }
+    }
     private var lastServed: String? = null
     private var manual = false
     val idle: Boolean get() = running == null && !manual
@@ -80,6 +94,7 @@ internal class SessionExportQueue(
         val work = reserved.copy(phase = if (record.cleanupOnly) SessionPhase.CLEANUP else SessionPhase.EXPORTING)
         try {
             repository.put(work) // Attempt reservation is durable BEFORE any external side effect.
+            active = ActiveProcessing(work.id, work.operation, if (work.cleanupOnly) ProcessingStage.VERIFYING else ProcessingStage.EXPORTING)
             notifyChanged(running, 0)
             val session = repository.session(work)
             // Full list only for the one export in flight. Cleanup uses hashes/summary, not source JPEGs.
@@ -97,13 +112,13 @@ internal class SessionExportQueue(
                                 "Insufficient export headroom; photos retained"
                             }
                             encode(session, frames, work.operation) { progress ->
-                                owner.execute { if (running == work.id) notifyChanged(running, progress) }
+                                progressUpdates.offer(Progress(work.id, work.operation, progress))
                             }
                         }
                         owner.execute {
                             runCatching { repository.put(work.copy(phase = SessionPhase.VERIFYING)) }
                                 .onFailure { android.util.Log.e("SessionExportQueue", "Verification checkpoint failed; receipt still required", it) }
-                            notifyChanged(running, 100)
+                            reportStage(ProcessingStage.VERIFYING)
                         }
                         verify(session, work.operation, uri, work.selected)
                     }
@@ -113,6 +128,7 @@ internal class SessionExportQueue(
                             if (work.cleanupOnly) {
                                 // A crash consumes a cleanup slot unless the complete deletion can be proven.
                                 if (recovery && !repository.cleanupComplete(work)) error("Interrupted partial cleanup; reserved attempt consumed")
+                                reportStage(ProcessingStage.CLEANUP)
                                 val done = repository.cleanup(work, verified)
                                 if (done) {
                                     repository.put(work.copy(phase = SessionPhase.FINISHED, error = "",
@@ -125,7 +141,7 @@ internal class SessionExportQueue(
                                     android.util.Log.e("SessionExportQueue", "Last-video preference refresh failed; receipt retained", it)
                                 }
                             }
-                            running = null
+                            running = null; active = null
                             notifyChanged(null, 0)
                             pump()
                         } catch (error: Exception) { failed(work, error) }
@@ -142,7 +158,7 @@ internal class SessionExportQueue(
                 else if (work.cleanupOnly) SessionPhase.CLEANUP else SessionPhase.QUEUED,
                 error = error.message ?: error.javaClass.simpleName))
         } finally {
-            running = null
+            running = null; active = null
             notifyChanged(null, 0)
         }
         // Defer even preflight failures; a large invalid backlog must not recurse on the owner stack.

@@ -93,7 +93,8 @@ class SessionsView(
         evidenceUnavailable(evidenceMissing)
         val active = values.mapNotNull { it.processing.active }.distinct()
         workStatus.text = active.joinToString("\n") { "${it.stage.label} · ${it.sessionId}${it.percent?.let { p -> " · $p%" } ?: " · in progress"}" }
-            .ifEmpty { if (values.any { it.processing.wait == ProcessingWait.RETRY_DELAY }) "Waiting for automatic retry" else
+            .ifEmpty { if (!loaded || values.any { !it.processing.hydrated }) "Processing status loading / unavailable" else
+                if (values.any { it.processing.wait == ProcessingWait.RETRY_DELAY }) "Waiting for automatic retry" else
                 if (values.any { it.processing.wait != ProcessingWait.NONE }) "Processing queued / waiting" else "No active media processing" }
         refreshDates()
         if (selected == null) rebuildList() else renderDetail()

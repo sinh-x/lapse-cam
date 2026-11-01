@@ -66,6 +66,9 @@ internal class WorkSessionsView(
     private var dateRows = emptyList<DateRow>()
     private val rowIds = mutableMapOf<String, Long>()
     private var nextRowId = 0L
+    private var rowSource: List<WorkSession>? = null
+    private var rowKey: List<Any?>? = null
+    private var rowProjection: TimeboxHistory? = null
     private val dateAdapter = object : BaseAdapter() {
         override fun getCount() = dateRows.size
         override fun getItem(position: Int) = dateRows[position]
@@ -189,7 +192,7 @@ internal class WorkSessionsView(
             addView(formScroll, LayoutParams(-1, 0, 1f))
         }
         formGeneration++
-        content.removeAllViews(); content.addView(message); actionsKey = ""; linksKey = null
+        content.removeAllViews(); content.addView(message); actionsKey = ""; linksKey = null; rowSource = null
         newButton = null; currentActions = null; archiveFilter = null; emptyList = null; typeFilterButton = null; sortButton = null
         reminderToggle = null; reminderPanel = null; reminderStatus = null; notificationButton = null; timingButton = null
         titleField = null; outcomeField = null; descriptionField = null; durationField = null; durationShortcuts = null; saveButton = null
@@ -367,8 +370,14 @@ internal class WorkSessionsView(
                 typeFilterButton?.text = "Activity type: ${activityFilter?.let { WorkType.fromKey(it).label } ?: "All"}"
                 sortButton?.text = "Within portion/date: ${when (sort) { WorkSort.NEWEST -> "Newest"; WorkSort.OLDEST -> "Oldest"; WorkSort.TYPE -> "Activity type" }}"
                 val partition = state.snapshot.records.filter { it.archived == showArchived }
-                val projection = TimeboxHistory.project(state.snapshot.records, showArchived, activityFilter, sort,
-                    LocalDate.now(), ZoneId.systemDefault())
+                val projectionKey = listOf(showArchived, activityFilter, sort, LocalDate.now(), ZoneId.systemDefault(), expandedDates.toSet())
+                val changed = rowSource !== state.snapshot.records || rowKey != projectionKey
+                if (changed) {
+                    rowSource = state.snapshot.records; rowKey = projectionKey
+                    rowProjection = TimeboxHistory.project(state.snapshot.records, showArchived, activityFilter, sort,
+                        LocalDate.now(), ZoneId.systemDefault())
+                }
+                val projection = checkNotNull(rowProjection)
                 val displayed = projection.unstarted + projection.today + projection.dates.flatMap { it.items }
                 emptyList?.apply {
                     text = if (partition.isNotEmpty()) "No timeboxes match this Activity type."
@@ -381,6 +390,7 @@ internal class WorkSessionsView(
                 notificationButton?.apply { text = access?.notificationAction ?: "Allow end notification"; isEnabled = access?.notificationsAllowed != true }
                 timingButton?.apply { text = access?.timingAction ?: "Allow background timing"; isEnabled = access?.backgroundTiming != true }
                 newButton?.apply { text = if (owner.editorDraft != null || state.snapshot.draft != null) "Resume draft" else "New timebox"; isEnabled = state.loaded }
+                if (changed) {
                 val projected = mutableListOf<DateRow>()
                 fun append(values: List<WorkSession>) { values.forEach { work ->
                     val date = work.start?.let { "Started ${dateTime(it.epoch)}" }
@@ -400,6 +410,7 @@ internal class WorkSessionsView(
                 }
                 if (dateRows.map { it.key to it.label } != projected.map { it.key to it.label }) {
                     dateRows = projected; dateAdapter.notifyDataSetChanged()
+                }
                 }
             }
             "detail" -> {

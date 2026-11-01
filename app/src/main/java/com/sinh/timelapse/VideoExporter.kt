@@ -28,6 +28,7 @@ class VideoExporter(
     private val availableBytes: (File) -> Long = { android.os.StatFs(it.path).availableBytes },
     private val checkpoint: (String) -> Unit = {},
 ) {
+    internal var stageChanged: (String, ProcessingStage) -> Unit = { _, _ -> }
     private val inventoryFiles = filesDirectory
     private val attempts = File(filesDirectory, "export-attempts").apply { check(mkdirs() || isDirectory) }
     private val cache = File(cacheDirectory.canonicalFile, "export-attempts").apply {
@@ -83,9 +84,12 @@ class VideoExporter(
         val temporary = File(cache, "${attempt.id}.mp4")
         try {
             checkpoint("recorded")
+            stageChanged(attempt.id, ProcessingStage.EXPORTING)
             encode(temporary, selected, session.fps, onProgress)
+            stageChanged(attempt.id, ProcessingStage.VERIFYING)
             validateEncoded(temporary, selected.size, session.fps, adaptive?.maxSeconds)
             checkpoint("encoded")
+            stageChanged(attempt.id, ProcessingStage.PUBLISHING)
             val resolver = context.contentResolver
             val uri = checkNotNull(resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, attempt.name)

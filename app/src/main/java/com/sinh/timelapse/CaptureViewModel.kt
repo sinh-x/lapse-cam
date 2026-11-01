@@ -81,6 +81,37 @@ class CaptureViewModel @JvmOverloads constructor(
     @Volatile private var exportQueue: SessionExportQueue? = null
     private var reviewRunning: String? = null
     private var reviewProgress = 0
+    private var manualRevision = 0L
+    private var lastReviewKey: List<Any?>? = null
+    private var attentionRevision = -1L
+    private var manualActive: ActiveProcessing? = null
+    private var deletionActive: ActiveProcessing? = null
+    private val manualIssues = mutableMapOf<String, SessionIssue>()
+    private val mutableProcessing = MutableLiveData<List<ActiveProcessing>>(emptyList())
+    val processing: LiveData<List<ActiveProcessing>> = mutableProcessing
+    private data class ReviewDelivery(val values: List<SessionReview>, val active: List<ActiveProcessing>)
+    private val reviewUpdates = LatestUpdate<ReviewDelivery>(Executor { main.post(it) }) { delivery ->
+        if (!closed) {
+            val projected = delivery.values.map { review ->
+                if (review.id == current.session?.directory?.name) review.copy(
+                    status = if (current.capturing) "Active" else if (current.switching) "Closing" else "Paused",
+                    activeMillis = current.activeMillis ?: review.activeMillis,
+                    canDelete = !current.busy && !current.capturing && !current.switching && !current.recoveryBlocked)
+                else review
+            }
+            if (mutableSessions.value != projected) mutableSessions.value = projected
+            if (mutableProcessing.value != delivery.active) mutableProcessing.value = delivery.active
+            delivery.active.firstOrNull { it.sessionId == current.session?.directory?.name && current.exporting }?.let {
+                if (current.progress != (it.percent ?: 0)) update(current.copy(progress = it.percent ?: 0))
+            }
+        }
+    }
+    private val maintenancePending = java.util.concurrent.atomic.AtomicBoolean()
+    private val manualProgress = LatestUpdate<ActiveProcessing>(worker) { progress ->
+        val active = manualActive
+        if (active?.operation == progress.operation && active.stage == ProcessingStage.EXPORTING &&
+            (progress.percent ?: 0) >= (active.percent ?: 0)) { manualActive = progress; publishSessions() }
+    }
     private val manualReviews = linkedMapOf<String, SessionReview>()
     private val outputEvidence by lazy { OutputObservationStore(filesDirectory) }
     val outputReviewError = MutableLiveData<String?>(null)
@@ -127,12 +158,14 @@ class CaptureViewModel @JvmOverloads constructor(
                 }
             }
             val now = monotonicMillis()
-            worker.execute {
+            if (maintenancePending.compareAndSet(false, true)) worker.execute {
                 try {
                     exportQueue?.tick(now)
                     if (foreground) repository.records().filter { it.phase == SessionPhase.DELETING && it.error.isEmpty() }.forEach {
+                        deletionActive = ActiveProcessing(it.id, it.operation, ProcessingStage.DELETING); publishSessions()
                         try { repository.continueDelete(it.id) }
                         catch (error: Exception) { repository.put(repository.get(it.id).copy(error = error.message ?: "Delete failed")) }
+                        finally { deletionActive = null }
                     }
                     publishSessions()
                     post {
@@ -149,6 +182,7 @@ class CaptureViewModel @JvmOverloads constructor(
                     attention.failure("queue", detail)
                     update(current.copy(message = detail, messageImpact = CaptureMessageImpact.UNKNOWN, queueSafetyBlocked = true))
                 } }
+                finally { maintenancePending.set(false) }
             }
             main.postDelayed(this, 1_000)
         }
@@ -191,7 +225,8 @@ class CaptureViewModel @JvmOverloads constructor(
                     if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
                 }
                 manualReviews.clear()
-                store.directories().filter { directory -> repository.records().none { it.id == directory.name } }.forEach { directory ->
+                val indexedIds = recoveredRecords.mapTo(HashSet()) { it.id }
+                store.directories().filter { directory -> directory.name !in indexedIds }.forEach { directory ->
                     val saved = store.load(directory, false)
                     refreshManualReview(saved, store.savedSummary(saved))
                 }
@@ -200,7 +235,9 @@ class CaptureViewModel @JvmOverloads constructor(
                 val frames = snapshot?.count ?: 0
                 // Ambiguous export cleanup must not hide a valid session or block its camera.
                 // Every export retries reconciliation on this same serialized worker before encoding.
-                val exporter = VideoExporter(getApplication(), filesDirectory, cacheDirectory)
+                val exporter = VideoExporter(getApplication(), filesDirectory, cacheDirectory).apply {
+                    stageChanged = { operation, stage -> worker.execute { exportQueue?.reportStage(stage, operation) } }
+                }
                 val exportRecoveryError = runCatching { exporter.reconcile() }.exceptionOrNull()
                 exportQueue = SessionExportQueue(worker, mediaWorker, repository, exporter, availableBytes,
                     changed = { id, progress -> publishSessions(id, progress) }, published = { uri ->
@@ -507,26 +544,47 @@ class CaptureViewModel @JvmOverloads constructor(
         if (current.busy || current.capturing || current.recoveryBlocked || current.frames == 0 || session.split != SessionSplit.OFF) return
         update(current.copy(exporting = true, progress = 0, messageImpact = CaptureMessageImpact.ROUTINE, message = "Exporting MP4. Keep the app open…"))
         worker.execute {
+            var admitted = false
             try {
-                check(exportQueue?.beginManual() == true) { "Automatic export busy. Try manual export when it finishes" }
+                admitted = exportQueue?.beginManual() == true
+                check(admitted) { "Automatic export busy. Try manual export when it finishes" }
+                val operation = java.util.UUID.randomUUID().toString()
+                manualIssues.remove(session.directory.name)
+                manualActive = ActiveProcessing(session.directory.name, operation, ProcessingStage.EXPORTING)
+                publishSessions()
                 val frames = store.exportFrames(session)
                 check(ExportSpace.hasHeadroom(availableBytes(session.directory), frames.size.toLong(), session.fps)) {
                     "Insufficient export headroom. Free space and retry"
                 }
                 mediaWorker.execute {
                     try {
-                        val uri = VideoExporter(getApplication(), filesDirectory, cacheDirectory).export(session, frames) { progress ->
-                            post { update(current.copy(progress = progress)) }
+                        val uri = VideoExporter(getApplication(), filesDirectory, cacheDirectory).apply {
+                            stageChanged = { op, stage -> worker.execute {
+                                manualActive?.takeIf { it.operation == op }?.let {
+                                    manualActive = it.copy(stage = stage, percent = null); publishSessions()
+                                }
+                            } }
+                        }.export(session, frames, operation) { progress ->
+                            manualProgress.offer(ActiveProcessing(session.directory.name, operation, ProcessingStage.EXPORTING, progress.coerceIn(0, 100)))
                         }
                         rememberVideo(uri, session.directory.name)
-                        worker.execute { refreshManualReview(session); publishSessions() }
+                        worker.execute { manualActive = null; refreshManualReview(session); publishSessions() }
                         post { update(current.copy(exporting = false, video = uri, messageImpact = CaptureMessageImpact.ROUTINE,
                             message = "Saved to Movies/TimestampTimelapse. Photos kept for re-export.")) }
-                    } catch (error: Exception) { post { fail(error) } }
-                    finally { worker.execute { exportQueue?.endManual() } }
+                    } catch (error: Exception) {
+                        worker.execute {
+                            manualIssues[session.directory.name] = SessionIssue(manualActive?.stage ?: ProcessingStage.UNKNOWN,
+                                error.message ?: "Manual export failed; photos retained")
+                            manualActive = null; publishSessions()
+                        }
+                        post { fail(error) }
+                    }
+                    finally { worker.execute { manualActive = null; exportQueue?.endManual(); publishSessions() } }
                 }
             } catch (error: Exception) {
-                exportQueue?.endManual()
+                if (admitted) manualIssues[session.directory.name] = SessionIssue(manualActive?.stage ?: ProcessingStage.UNKNOWN,
+                    error.message ?: "Manual export could not start; photos retained")
+                manualActive = null; if (admitted) exportQueue?.endManual(); publishSessions()
                 post { fail(error) }
             }
         }
@@ -541,18 +599,26 @@ class CaptureViewModel @JvmOverloads constructor(
     private fun refreshManualReview(session: CaptureSession, snapshot: SessionStore.Snapshot = store.snapshot(session)) {
         if (session.split != SessionSplit.OFF) return
         val output = getApplication<Application>().getSharedPreferences("exports", 0).getString("session:${session.directory.name}", null)
-        manualReviews[session.directory.name] = SessionReview(session.directory.name, session.startedAt,
+        val nextReview = SessionReview(session.directory.name, session.startedAt,
             when (session.configuration) { is SamplingConfiguration.Adaptive -> "Adaptive · Off"; is SamplingConfiguration.Fixed -> "Fixed"; else -> "Legacy manual" },
             (session.configuration as? SamplingConfiguration.Adaptive)?.maxSeconds, session.fps, snapshot.activeMillis,
             snapshot.unknownTail, snapshot.selected, snapshot.count, snapshot.count, snapshot.bytes, snapshot.stage,
             "Saved · manual workflow", 0, 0, 0, "", output, false, true)
+        if (manualReviews[session.directory.name] != nextReview) { manualReviews[session.directory.name] = nextReview; manualRevision++ }
     }
 
     private fun publishSessions(running: String? = reviewRunning, progress: Int = reviewProgress) {
         reviewRunning = running
         reviewProgress = progress
+        val key = listOf(repository.revision, manualRevision, reviewRunning, reviewProgress, outputEvidence.revision,
+            manualActive, deletionActive, exportQueue?.active, manualIssues.toMap(), foreground)
+        if (key == lastReviewKey) return
+        lastReviewKey = key
         val records = repository.records()
-        val reviews = manualReviews.values.filter { review -> records.none { it.id == review.id } } + records.map { record ->
+        val identities = records.mapTo(HashSet()) { it.id }
+        val reviews = manualReviews.values.filter { it.id !in identities }.map { review -> review.copy(processing = SessionProcessing(
+            active = manualActive?.takeIf { it.sessionId == review.id } ?: deletionActive?.takeIf { it.sessionId == review.id },
+            issues = listOfNotNull(manualIssues[review.id]), hydrated = true)) } + records.map { record ->
             val session = repository.session(record)
             val remaining = repository.remaining(record)
             SessionReview(record.id, session.startedAt, when (session.configuration) {
@@ -574,28 +640,24 @@ class CaptureViewModel @JvmOverloads constructor(
                     (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()),
                 !record.busy && record.phase !in setOf(SessionPhase.DELETED, SessionPhase.FINISHED) && !record.cycle.reserved,
                 verifiedOperation = record.operation.takeIf { record.receipt != null && record.output != null },
-                processing = SessionProcessingProjection.project(record, null, foreground))
+                processing = SessionProcessingProjection.project(record, deletionActive?.takeIf { it.sessionId == record.id } ?: exportQueue?.active, foreground))
         }
         val evidenceError = runCatching { outputEvidence.load() }.exceptionOrNull()?.let {
             "Output review unavailable: ${it.message}. Existing evidence retained; attention count may be incomplete."
         }
         val decorated = reviews.map { review -> review.copy(outputObservation =
             if (evidenceError == null) outputEvidence.observation(review.outputIdentity) else review.outputObservation) }
+        val observeAttention = attentionRevision != repository.revision
+        attentionRevision = repository.revision
         post {
             if (outputReviewError.value != evidenceError) outputReviewError.value = evidenceError
             if (evidenceError != null) attention.failure("output-review", evidenceError) else attention.resolve("output-review")
-            val unsafe = SessionAttentionPolicy.observe(attention, records)
-            // Preserve the existing observer/sync workload on ordinary queue progress.
-            // The Sessions publication below delivers new attention without a second State emission.
-            if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
-            mutableSessions.value = decorated.map { review ->
-                if (review.id == current.session?.directory?.name) review.copy(
-                    status = if (current.capturing) "Active" else if (current.switching) "Closing" else "Paused",
-                    activeMillis = current.activeMillis ?: review.activeMillis,
-                    canDelete = !current.busy && !current.capturing && !current.switching && !current.recoveryBlocked)
-                else review
+            if (observeAttention) {
+                val unsafe = SessionAttentionPolicy.observe(attention, records)
+                if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
             }
         }
+        reviewUpdates.offer(ReviewDelivery(decorated, listOfNotNull(exportQueue?.active, manualActive, deletionActive).distinct()))
     }
 
     fun retrySession(id: String) {
@@ -627,6 +689,8 @@ class CaptureViewModel @JvmOverloads constructor(
             try {
                 check(foreground) { "Open the app to delete sources" }
                 val existing = repository.records().firstOrNull { it.id == id }
+                deletionActive = ActiveProcessing(id, existing?.operation ?: "user-delete:$id", ProcessingStage.DELETING)
+                publishSessions()
                 existing?.let { record -> post { attention.resolve(SessionAttentionPolicy.key(record, SessionAttentionPolicy.Category.DELETE)) } }
                 if (existing == null) {
                     val session = selectedCurrent ?: store.load(File(filesDirectory.canonicalFile, "sessions/$id"))
@@ -663,7 +727,7 @@ class CaptureViewModel @JvmOverloads constructor(
                         message = detail, messageImpact = CaptureMessageImpact.UNKNOWN, queueSafetyBlocked = true))
                 }
                 publishSessions()
-            }
+            } finally { deletionActive = null; publishSessions() }
         }
     }
 
