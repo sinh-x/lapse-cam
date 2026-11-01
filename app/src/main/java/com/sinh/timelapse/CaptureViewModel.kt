@@ -182,7 +182,7 @@ class CaptureViewModel @JvmOverloads constructor(
                 post {
                     val unsafe = SessionAttentionPolicy.observe(attention, recoveredRecords, baseline = !attentionHydrated)
                     attentionHydrated = true
-                    update(current.copy(sessionSafetyBlocked = unsafe))
+                    if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
                 }
                 manualReviews.clear()
                 store.directories().filter { directory -> repository.records().none { it.id == directory.name } }.forEach { directory ->
@@ -571,7 +571,9 @@ class CaptureViewModel @JvmOverloads constructor(
         }
         post {
             val unsafe = SessionAttentionPolicy.observe(attention, records)
-            update(current.copy(sessionSafetyBlocked = unsafe))
+            // Preserve the existing observer/sync workload on ordinary queue progress.
+            // The Sessions publication below delivers new attention without a second State emission.
+            if (current.sessionSafetyBlocked != unsafe) update(current.copy(sessionSafetyBlocked = unsafe))
             mutableSessions.value = reviews.map { review ->
                 if (review.id == current.session?.directory?.name) review.copy(
                     status = if (current.capturing) "Active" else if (current.switching) "Closing" else "Paused",
