@@ -43,6 +43,12 @@ Adaptive example: 30s × 30fps gives a 900-frame budget. Photo 901 thins selecti
 
 ## Build
 
+**Current validation workflow:** Pixel is primary; relevant Pixel tests and hands-on
+checks plus APK builds/lint run locally. GitHub Actions runs host unit tests and
+accounting self-tests. OPPO/exhaustive cross-device UAT is optional follow-up,
+not a mandatory two-phone merge gate. [Scope, commands and evidence rules](docs/VALIDATION_WORKFLOW.md).
+Historical ticket results below remain historical, not new passes.
+
 Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **35.0.0**, with the pinned Gradle/AGP/Kotlin and cached dependencies. A minimal Java runtime is insufficient. Set `JAVA_HOME` and `ANDROID_HOME` (or configure `sdk.dir` in ignored `local.properties`). TTL-003 checks retain the exact existing host paths in the [offline runbook](docs/OFFLINE_INSTRUMENTATION.md). Do not install/upgrade tools or fetch missing dependencies without a separate bounded owner approval; prior retrieval approval is not blanket network permission.
 
 ```sh
@@ -51,7 +57,7 @@ Use a **full JDK 17** and existing Android SDK platform **36** / build-tools **3
 ./gradlew --offline --no-daemon --console=plain -Pandroid.builder.sdkDownload=false :app:lintDebug
 ```
 
-These are implementation phase checks, not the independently approved full review matrix. Device tests require fresh disposable-context/install/test permission and an explicit exact-identity wrapper. See the [runbook's no-uninstall command correction](docs/OFFLINE_INSTRUMENTATION.md#validation-and-phone-data-boundary) before any device invocation: the original matrix must be reconciled/reapproved. Do not use an implicit device, alternate runner or unapproved device substitution.
+These are the current local checks, not an independent review or human UAT pass. Historical signed matrix requirements are not silently rewritten by the current workflow split. Device tests require fresh disposable-context/install/test permission and an explicit exact-identity wrapper. See the [runbook's no-uninstall command correction](docs/OFFLINE_INSTRUMENTATION.md#validation-and-phone-data-boundary) before any device invocation: the original matrix must be reconciled/reapproved. Do not use an implicit device, alternate runner or unapproved device substitution.
 
 Local build artifacts (not committed):
 
@@ -192,7 +198,7 @@ This is a foreground-only prototype, with one current capture owner plus a persi
 - `TimeboxReminderAccess.kt`: independent notification/background permission status and actionable labels (not a DND bypass).
 - `CameraUiPolicy.kt` / `CameraSettingsSheet.kt`: pure LIVE/action projection and native grouped settings sheet.
 - `BlackoutPolicy.kt` / `PhoneMotionPolicy.kt`: Activity-owned monotonic idle/eligibility, foreground inertial movement/settling, callback generations and one-shot timebox notices; no capture or media ownership.
-- `tools/verify_timebox_results.py` / `.github/workflows/android.yml`: TTL-011 artifact accounting and separate hosted host/build/lint checks (neither is human UAT).
+- `tools/verify_timebox_results.py` / `.github/workflows/android.yml`: historical TTL-011 artifact accounting and current hosted host-unit/accounting checks; APK builds, lint and relevant Pixel checks run locally (none is automatically human UAT acceptance).
 - `CaptureViewModel.kt`: capture cadence, 1Hz boundary admission/drain, foreground eligibility and separate file/media workers.
 - `SessionLifecycle.kt`: pure split, retry-cycle and fair due-work policies.
 - `SessionRepository.kt`: atomic index, stable successor identities, frozen manifests, receipts and exact resumable inventory cleanup.

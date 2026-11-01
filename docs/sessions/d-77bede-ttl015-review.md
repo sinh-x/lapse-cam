@@ -1,5 +1,29 @@
 # TTL-015 review, Pixel validation and PR — d-77bede
 
+## Owner-approved validation workflow revision
+
+After matching full hosted CI run
+[41262489862](https://github.com/sinh-x/lapse-cam/actions/runs/41262489862) passed on
+`d7f20565eecc644b0f58276b91dc51c545addf7a`, Sinh requested a lighter workflow,
+focused primarily on Pixel and moving some CI checks local. Presented the exact
+split and Sinh selected **Apply this workflow split**: relevant Pixel feature tests
+and hands-on checks required; OPPO/exhaustive cross-device UAT optional; CI runs
+host unit/accounting tests; both APK builds and lint remain local pre-merge checks.
+
+See [current workflow](../VALIDATION_WORKFLOW.md). This continuation changes only
+workflow/accounting/docs, not compiled app/test sources or installed test app.
+The latest local/Pixel app evidence below remains source-equivalent; a new CI run
+must validate the workflow head. The historical signed plan/matrix is unchanged,
+missing checks are not relabelled passed, and unrelated ticket debt is not closed.
+No independent review or full human UAT sign-off is claimed. Earlier paragraphs
+below naming both-phone gates describe the superseded validation scope.
+
+The workflow verifier now has separate host-only and historical ttl011-full
+profiles. Historical candidate accounting still requires its original full task
+set; the smaller hosted command cannot satisfy it. Cross-profile/extra-task and
+missing-host negatives guard the current split without changing pinned actions,
+token scope, failure handling or artifact retention.
+
 ## Final motion continuation (supersedes earlier candidate counts/hashes)
 
 After the immersive candidate, Sinh asked about differentiating phone movement

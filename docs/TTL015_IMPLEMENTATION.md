@@ -34,11 +34,14 @@ Current hashes, failures/repairs and remaining coverage are recorded in the
 The current user request authorizes a PR targeting `develop` (an explicit exception
 to the older `docs/BRANCHING.md` main-target guide) and merge only if good. Remote
 `develop` was verified at `693feed0ff0961616b63326f57455fd3dcfdf95a`, also the
-repository's default branch. Full plan acceptance is **not established**:
-independent review, full Android inventory and complete both-phone TS-1–12 UAT
-remain unexecuted (selected Pixel coverage is described above). Integration
-must retain these gates unless the owner explicitly accepts the validation gaps;
-no release, phone operations, cleanup or worktree return is implied.
+repository's default branch. Sinh subsequently selected the [Pixel-primary validation workflow](VALIDATION_WORKFLOW.md):
+relevant Pixel tests/hands-on checks and APK builds/lint run locally; hosted CI
+runs host tests/accounting self-tests. OPPO/exhaustive cross-device UAT is now
+optional follow-up, not a mandatory two-phone merge gate. The original full
+Android inventory, independent review and complete historical UAT remain unrun,
+not passed; source review/owner integration is not an independent/UAT sign-off.
+Full historical plan acceptance is not claimed. No release, further phone
+operations, cleanup or worktree return is implied.
 
 The sections below retain the original deployment's scope, 114-method inventory,
 old APK hashes and evidence. Its visible-system-bars design and no-device/no-remote/

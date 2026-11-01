@@ -57,12 +57,17 @@ def bindings(env):
             "approvedBase": BASE, "integrationBase": INTEGRATION_BASE}
 
 
-def workflow_contract(text):
-    """Strict approved workflow template + exact pins; not a general YAML parser.
+def workflow_contract(text, profile="ttl011-full"):
+    """Validate exact pins/tasks for a named workflow, not general YAML or approval.
 
-    YAML is deliberately not added as a dependency. Source review remains required.
-    Negative fixtures guard privileged triggers/tokens and skipped core commands.
+    Historical TTL-011 accounting keeps its full hosted-task contract by default.
+    The owner-selected TTL-015 host-only workflow is a separate explicit profile;
+    it cannot silently satisfy the old review contract. No new dependency needed.
     """
+    need(profile in ("ttl011-full", "host-only"), "Unknown workflow profile")
+    expected_tasks = [":app:testDebugUnitTest"]
+    if profile == "ttl011-full":
+        expected_tasks += [":app:assembleDebug", ":app:assembleDebugAndroidTest", ":app:lintDebug"]
     need("\t" not in text and "\r" not in text, "Noncanonical workflow")
     code = "\n".join(line.split(" #", 1)[0] for line in text.splitlines() if not line.lstrip().startswith("#"))
     for forbidden in ("pull_request_target", "secrets.", "write-all", "contents: write", "id-token:",
@@ -80,9 +85,9 @@ def workflow_contract(text):
                   'sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"',
                   'export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"',
                   '"$GITHUB_ENV"', '"$GITHUB_PATH"', 'app/build/ci/sdk-setup.log',
-                  ":app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug",
                   "set -euo pipefail", "if: always()", "app/build/test-results/", "app/build/outputs/", "app/build/reports/"):
         need(token in code, f"Missing workflow contract: {token}")
+    need(re.findall(r":app:[A-Za-z0-9]+", code) == expected_tasks, "Wrong hosted task split")
     need(re.search(r"(?m)^            app/build/outputs/$", code), "Upload must retain the complete checksummed build-output tree")
     need("--offline" not in code, "Hosted checks may download approved dependencies")
     # Only evidence collection/upload may have a condition; core build cannot skip.
@@ -205,6 +210,11 @@ def validate(review_root, output):
     print(f"TTL-011 artifact accounting passed: {output}")
 
 
+def legacy_workflow_fixture(current):
+    """Synthetic historical task split for TTL-011 accounting regression tests only."""
+    return current.replace(":app:testDebugUnitTest", ":app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug")
+
+
 class SelfTest(unittest.TestCase):
     def env(self):
         return {"PA_TICKET_ID": "TTL-011", "PA_FEATURE_SHA": "a" * 40, "PA_MATRIX_SOURCE": SOURCE,
@@ -216,14 +226,23 @@ class SelfTest(unittest.TestCase):
             with self.assertRaises(Invalid): bindings(env)
     def test_workflow_and_negative_contracts(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/android.yml").read_text()
-        workflow_contract(workflow)
+        workflow_contract(workflow, profile="host-only")
+        # This deliberate workflow change must NOT become historical matrix authority.
+        with self.assertRaises(Invalid): workflow_contract(workflow)
+        legacy = legacy_workflow_fixture(workflow)
+        workflow_contract(legacy)
+        with self.assertRaises(Invalid): workflow_contract(legacy.replace(":app:lintDebug", ""))
+        with self.assertRaises(Invalid): workflow_contract(legacy, profile="host-only")
+        with self.assertRaises(Invalid): workflow_contract(workflow, profile="unknown")
         for changed in (workflow.replace("pull_request:", "pull_request_target:"), workflow.replace("contents: read", "contents: write"),
-                        workflow.replace(PINS["actions/checkout"], "v4"), workflow.replace(":app:lintDebug", ""),
+                        workflow.replace(PINS["actions/checkout"], "v4"), workflow.replace(":app:testDebugUnitTest", ""),
+                        workflow.replace(":app:testDebugUnitTest", ":app:testDebugUnitTest :app:assembleDebug"),
+                        workflow.replace(":app:testDebugUnitTest", ":app:testDebugUnitTest :app:lintDebug"),
                         workflow.replace("runs-on: ubuntu-24.04", "runs-on: ubuntu-latest"),
                         workflow.replace('export PATH="$(dirname "$sdkmanager_bin"):$ANDROID_HOME/platform-tools:$PATH"', "# missing SDK PATH"),
                         workflow.replace('            app/build/outputs/\n', '            app/build/outputs/apk/\n'),
                         workflow.replace("      - name: Host checks", "      - if: false\n        name: Host checks")):
-            with self.assertRaises(Invalid): workflow_contract(changed)
+            with self.assertRaises(Invalid): workflow_contract(changed, profile="host-only")
     def test_hosted_sdk_discovery_without_sdkmanager_on_path(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/android.yml").read_text()
         start = workflow.index('          export ANDROID_HOME=')
@@ -268,7 +287,7 @@ class SelfTest(unittest.TestCase):
             with self.assertRaises(Invalid): safe_file(hard)
     def test_begin_final_lifecycle_and_drift_fixtures(self):
         """Synthetic XML/APKs in an isolated Git repo, not application check evidence."""
-        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/android.yml").read_text()
+        workflow = legacy_workflow_fixture((Path(__file__).resolve().parents[1] / ".github/workflows/android.yml").read_text())
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             env = {"PATH": os.environ["PATH"], "HOME": str(root), "LANG": "C.UTF-8", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
