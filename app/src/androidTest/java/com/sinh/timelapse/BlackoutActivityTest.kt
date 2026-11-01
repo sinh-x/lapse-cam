@@ -285,7 +285,9 @@ class BlackoutActivityTest {
             val f = fixture(activity)
             for (state in listOf(liveState.copy(capturing = false), liveState.copy(loading = true),
                 liveState.copy(switching = true), liveState.copy(working = true), liveState.copy(boundLens = null),
-                liveState.copy(recoveryBlocked = true), liveState.copy(message = "Session queue needs attention"))) {
+                liveState.copy(recoveryBlocked = true), liveState.copy(message = "plain diagnostic", messageImpact = CaptureMessageImpact.CAPTURE_SAFETY),
+                liveState.copy(message = "unclassified diagnostic", messageImpact = CaptureMessageImpact.UNKNOWN),
+                liveState.copy(queueSafetyBlocked = true), liveState.copy(sessionSafetyBlocked = true))) {
                 f.show(); render(activity, state)
                 assertEquals(View.GONE, f.cover.visibility); assertNull(f.policy.timer)
                 render(activity, liveState); assertEquals(f.now + 30_000, f.policy.timer!!.deadline)
@@ -358,6 +360,163 @@ class BlackoutActivityTest {
                 android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED))
             assertEquals(40_000L, f.policy.timer!!.deadline)
         } }
+    }
+
+    private fun reviews(vararg values: Pair<String, Boolean>): List<SessionReview> = values.mapIndexed { index, (error, retry) ->
+        SessionReview("fixture-$index", 0, "Adaptive", 30, 30, 1000, false, 2, 3, 3, 4096, 0,
+            "Needs attention", 0, 3, 2, error, "content://fixture/video/$index", retry, true)
+    }
+    private fun publishReviews(owner: CaptureViewModel, reviews: List<SessionReview>) {
+        @Suppress("UNCHECKED_CAST")
+        val live = CaptureViewModel::class.java.getDeclaredField("mutableSessions").apply { isAccessible = true }
+            .get(owner) as androidx.lifecycle.MutableLiveData<List<SessionReview>>
+        live.value = reviews
+    }
+
+    private fun publishWork(owner: WorkSessionCoordinator, state: WorkSessionCoordinator.State) {
+        @Suppress("UNCHECKED_CAST")
+        val live = WorkSessionCoordinator::class.java.getDeclaredField("mutableState").apply { isAccessible = true }
+            .get(owner) as androidx.lifecycle.MutableLiveData<WorkSessionCoordinator.State>
+        live.value = state
+    }
+
+    @Test fun historicalAttentionKeepsMotionAndOriginalDeadlineAndSessionsControlsUnchanged() {
+        WorkUiFixtures.emptyActivity().use { scenario -> scenario.onActivity { activity ->
+            val f = fixture(activity)
+            val owner = ViewModelProvider(activity)[CaptureViewModel::class.java]
+            val saved = reviews("Interrupted partial cleanup" to true, "Retained error without retry" to false, "" to true)
+            val original = f.policy.timer
+            try {
+                repeat(10) { publishReviews(owner, saved); call(activity, "updateBlackout") }
+                assertEquals(original, f.policy.timer)
+                assertTrue(WorkUiFixtures.field<Boolean>(activity, "motionMonitoring"))
+                assertTrue(WorkUiFixtures.field<Button>(activity, "sessionsButton").text.contains("attention (3)"))
+                f.show(); publishReviews(owner, saved); call(activity, "updateBlackout")
+                assertEquals(View.VISIBLE, f.cover.visibility)
+                // No underlying Retry/delete/open operation is invoked by display transitions.
+                assertEquals(saved, owner.sessions.value)
+                call(activity, "showSessions")
+                assertEquals(View.GONE, f.cover.visibility); assertNull(f.policy.timer)
+                val view = WorkUiFixtures.field<SessionsView>(activity, "sessionsView")
+                val children = WorkUiFixtures.descendants(view)
+                assertTrue(children.filterIsInstance<TextView>().any { it.text.contains("Interrupted partial cleanup") && it.text.contains("cleanup attempts 2/3") })
+                assertEquals(2, children.filterIsInstance<Button>().count { it.text == "Retry" && it.isEnabled })
+                assertEquals(saved, owner.sessions.value)
+            } finally { publishReviews(owner, emptyList()) }
+        } }
+    }
+
+    @Test fun newSessionAndIndependentWorkNoticesRevealOnceAndRearmWithoutAcknowledgement() {
+        WorkUiFixtures.emptyActivity().use { scenario -> scenario.onActivity { activity ->
+            val f = fixture(activity)
+            val owner = ViewModelProvider(activity)[CaptureViewModel::class.java]
+            val work = WorkSessionCoordinator.get(activity.application)
+            val originalWork = work.state.value!!
+            val originalDraft = work.editorDraft
+            val record = SessionRecord("synthetic", phase = SessionPhase.NEEDS_ATTENTION, error = "storage cleanup attention", cleanupOnly = true)
+            try {
+                f.now = 20_000
+                SessionAttentionPolicy.observe(owner.attention, listOf(record))
+                call(activity, "updateBlackout")
+                assertEquals(50_000L, f.policy.timer!!.deadline)
+                val notice = WorkUiFixtures.field<TextView>(activity, "attentionNotice")
+                assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, notice.accessibilityLiveRegion)
+                assertTrue(notice.text.contains("Sessions"))
+                val timer = f.policy.timer
+                repeat(10) {
+                    SessionAttentionPolicy.observe(owner.attention, listOf(record.copy(error = "incidental detail $it")))
+                    render(activity, liveState.copy(message = "error storage attention", messageImpact = CaptureMessageImpact.INDEPENDENT))
+                    assertEquals(timer, f.policy.timer)
+                }
+                f.now = 49_999; f.policy.timeout(timer!!); assertFalse(f.policy.covered)
+                f.now++; f.policy.timeout(timer); call(activity, "renderBlackout")
+                assertEquals(View.VISIBLE, f.cover.visibility)
+                work.attention.failure("store", "Work-only save failure")
+                publishWork(work, originalWork.copy(error = "Work-only save failure", message = "Not saved"))
+                call(activity, "updateBlackout")
+                assertEquals(View.GONE, f.cover.visibility)
+                assertEquals(80_000L, f.policy.timer!!.deadline)
+                assertTrue(notice.text.contains("Work"))
+                val workTimer = f.policy.timer
+                repeat(30) {
+                    work.attention.failure("store", "Work-only failure $it")
+                    publishWork(work, originalWork.copy(error = "Work-only failure $it", message = "Not saved"))
+                    call(activity, "updateBlackout")
+                }
+                assertEquals(workTimer, f.policy.timer)
+                assertEquals("Work-only failure 29", work.state.value!!.error)
+                assertEquals(originalWork.snapshot, work.state.value!!.snapshot)
+                assertEquals(originalDraft, work.editorDraft)
+                f.now = 80_000; f.policy.timeout(workTimer!!); call(activity, "renderBlackout")
+                assertEquals(View.VISIBLE, f.cover.visibility)
+                // A real safety blocker always wins, even with a simultaneous independent notice.
+                work.attention.failure("save:other-item", "independent")
+                render(activity, liveState.copy(message = "no keywords", messageImpact = CaptureMessageImpact.CAPTURE_SAFETY))
+                assertEquals(View.GONE, f.cover.visibility); assertNull(f.policy.timer)
+            } finally {
+                owner.attention.resolveAll(); owner.attention.deliver(true)
+                work.attention.resolveAll(); work.attention.deliver(true)
+                publishWork(work, originalWork)
+            }
+        } }
+    }
+
+    @Test fun pendingAttentionWaitsForForegroundFinalModalAndFocusIncludingHeldReturnInput() {
+        WorkUiFixtures.emptyActivity().use { scenario -> scenario.onActivity { activity ->
+            val f = fixture(activity)
+            val owner = ViewModelProvider(activity)[CaptureViewModel::class.java]
+            try {
+                set(activity, "activityForeground", false); call(activity, "updateBlackout")
+                owner.attention.failure("new", "background incident")
+                call(activity, "updateBlackout")
+                assertEquals(1, owner.attention.snapshot.pending); assertNull(f.policy.timer)
+                set(activity, "modalDepth", 2); set(activity, "activityForeground", true)
+                call(activity, "updateBlackout")
+                set(activity, "modalDepth", 1); call(activity, "updateBlackout")
+                assertEquals(1, owner.attention.snapshot.pending); assertNull(f.policy.timer)
+                set(activity, "modalDepth", 0); activity.onWindowFocusChanged(false)
+                assertEquals(1, owner.attention.snapshot.pending)
+                f.now = 25_000; activity.onWindowFocusChanged(true)
+                assertEquals(0, owner.attention.snapshot.pending)
+                assertEquals(55_000L, f.policy.timer!!.deadline)
+                f.show(); f.motion(MotionEvent.ACTION_DOWN)
+                owner.attention.failure("other", "notice during held return")
+                call(activity, "updateBlackout")
+                assertEquals(View.GONE, f.cover.visibility); assertNull(f.policy.timer)
+                assertTrue(WorkUiFixtures.field<Boolean>(activity, "consumingTouch"))
+                f.motion(MotionEvent.ACTION_UP)
+                assertEquals(f.now + 30_000, f.policy.timer!!.deadline)
+            } finally { owner.attention.resolveAll(); owner.attention.deliver(true) }
+        } }
+    }
+
+    @Test fun recreationRetainsPendingEpisodesButNeverReplaysDeliveredNoticeOrCover() {
+        WorkUiFixtures.emptyActivity().use { scenario ->
+            lateinit var owner: CaptureViewModel
+            scenario.onActivity { activity ->
+                owner = ViewModelProvider(activity)[CaptureViewModel::class.java]
+                set(activity, "activityForeground", false); call(activity, "updateBlackout")
+                owner.attention.failure("pending", "new before recreation")
+                assertEquals(1, owner.attention.snapshot.pending)
+            }
+            try {
+                scenario.recreate(); WorkUiFixtures.idle()
+                scenario.onActivity { activity ->
+                    assertSame(owner, ViewModelProvider(activity)[CaptureViewModel::class.java])
+                    set(activity, "activityForeground", true); activity.onWindowFocusChanged(true)
+                    assertEquals(0, owner.attention.snapshot.pending)
+                    assertTrue(WorkUiFixtures.field<Button>(activity, "sessionsButton").text.contains("attention"))
+                    assertEquals(View.VISIBLE, WorkUiFixtures.field<TextView>(activity, "attentionNotice").visibility)
+                    assertEquals(View.GONE, WorkUiFixtures.field<View>(activity, "blackoutCover").visibility)
+                }
+                scenario.recreate(); WorkUiFixtures.idle()
+                scenario.onActivity { activity ->
+                    set(activity, "activityForeground", true); activity.onWindowFocusChanged(true)
+                    assertEquals(View.GONE, WorkUiFixtures.field<TextView>(activity, "attentionNotice").visibility)
+                    assertEquals(View.GONE, WorkUiFixtures.field<View>(activity, "blackoutCover").visibility)
+                }
+            } finally { owner.attention.resolveAll(); owner.attention.deliver(true) }
+        }
     }
 
     @Test fun preferenceSurvivesRecreationButCoverAndOldCallbackDoNot() {

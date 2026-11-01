@@ -71,6 +71,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var split: Spinner
     private lateinit var finish: Button
     private lateinit var backlog: TextView
+    private lateinit var sessionsButton: Button
+    private lateinit var workButton: Button
+    private lateinit var attentionNotice: TextView
+    private var sessionAttentionDetails: TextView? = null
     private var sessionsView: SessionsView? = null
     private var displayedSession: String? = null
     private lateinit var timestampSettings: Button
@@ -193,7 +197,7 @@ class MainActivity : ComponentActivity() {
             sessionsView?.render(sessions)
             if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) sync.backfillAssociations(sessions)
             backlog.text = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size,
-                sessions.sumOf { it.bytes } / 1048576.0, sessions.count { it.canRetry })
+                sessions.sumOf { it.bytes } / 1048576.0, sessions.count { it.canRetry || it.error.isNotEmpty() })
             renderWork()
         }
         work.state.observe(this) { renderWork(); sessionsView?.render(model.sessions.value.orEmpty()) }
@@ -226,8 +230,11 @@ class MainActivity : ComponentActivity() {
         summary.text = String.format(Locale.ROOT, "Capture %s · %d photos · est. MP4 %.1fs", active, state.frames, seconds)
         // Errors stay on Camera. Routine diagnostics/export progress live in Recording details.
         val message = listOf(state.message, state.cameraMessage).filter { it.isNotEmpty() }.joinToString("\n")
-        val actionable = state.recoveryBlocked || state.cameraMessage.isNotEmpty() || listOf("error", "failed", "storage", "attention", "insufficient", "unavailable").any { message.contains(it, true) }
+        val safetyError = state.blackoutSafetyError
+        val actionable = safetyError || state.messageImpact == CaptureMessageImpact.INDEPENDENT
         status.visibility = if (actionable) View.VISIBLE else View.GONE
+        // Independent diagnostic refreshes are not a stream of new accessible incidents.
+        status.accessibilityLiveRegion = if (safetyError) View.ACCESSIBILITY_LIVE_REGION_POLITE else View.ACCESSIBILITY_LIVE_REGION_NONE
         if (status.text.toString() != message) status.text = message
         val ui = CameraUiPolicy.project(CameraUiPolicy.Input(state.capturing, session != null, state.busy, state.switching,
             state.recoveryBlocked, state.boundLens == state.lens, session?.split != null && session.split != SessionSplit.OFF, state.loading, state.working))
@@ -274,7 +281,7 @@ class MainActivity : ComponentActivity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         blackoutLive = ui.live
         blackoutCameraReady = state.boundLens == state.lens && !state.loading && !state.recoveryBlocked && !state.switching && !state.working
-        blackoutError = actionable
+        blackoutError = safetyError
         updateBlackout()
     }
 
@@ -314,6 +321,10 @@ class MainActivity : ComponentActivity() {
         statistics = label("0 photos", 14f)
         backlog = label("Sessions", 14f)
         status = label("", 13f).apply { visibility = View.GONE; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        attentionNotice = label("", 14f).apply {
+            visibility = View.GONE
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
         summary = label("Capture 00:00:00 · 0 photos", 12f)
         export = Button(this).apply { text = "Export MP4"; setOnClickListener { model.export() } }
         open = Button(this).apply { text = "Open last video"; setOnClickListener { model.state.value?.video?.let(::openVideoUri) } }
@@ -343,7 +354,8 @@ class MainActivity : ComponentActivity() {
         val cardTop = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         workTitle = label("No timebox running", 14f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         cardTop.addView(workTitle, LinearLayout.LayoutParams(0, -2, 1f))
-        cardTop.addView(Button(this).apply { text = "Work"; setOnClickListener { showWork() } }, LinearLayout.LayoutParams(-2, -2))
+        workButton = Button(this).apply { text = "Work"; setOnClickListener { showWork() } }
+        cardTop.addView(workButton, LinearLayout.LayoutParams(-2, -2))
         card.addView(cardTop)
         val timing = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         workRemaining = label("", 14f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
@@ -373,7 +385,7 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { if (hasCameraPermission()) { invalidateCamera(); bindCamera() } else requestCamera.launch(Manifest.permission.CAMERA) }
         }
         recovery = Button(this).apply { text = "Retry saved session recovery"; visibility = View.GONE; setOnClickListener { model.retryRecovery() } }
-        root.addView(permission); root.addView(recovery); root.addView(status); root.addView(summary)
+        root.addView(permission); root.addView(recovery); root.addView(status); root.addView(attentionNotice); root.addView(summary)
         capture = Button(this).apply {
             text = "Start capture"; minHeight = dp(72); minWidth = dp(72); textSize = 12f
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(255, 205, 205)) }
@@ -381,7 +393,8 @@ class MainActivity : ComponentActivity() {
         }
         finish = Button(this).apply { text = "Finish session\nand export"; visibility = View.GONE; setOnClickListener { model.finishSession() } }
         val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        controls.addView(Button(this).apply { text = "Sessions"; setOnClickListener { showSessions() } }, LinearLayout.LayoutParams(0, -2, 1f))
+        sessionsButton = Button(this).apply { text = "Sessions"; setOnClickListener { showSessions() } }
+        controls.addView(sessionsButton, LinearLayout.LayoutParams(0, -2, 1f))
         controls.addView(capture, LinearLayout.LayoutParams(dp(96), dp(96)))
         controls.addView(finish, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(controls)
@@ -443,8 +456,10 @@ class MainActivity : ComponentActivity() {
     private fun updateBlackout() {
         if (!::blackoutCover.isInitialized || activityDestroyed) return
         val modal = modalDepth > 0 || downloadPickerPending
-        val error = blackoutError || work.state.value?.error != null ||
-            model.sessions.value.orEmpty().any { it.canRetry || it.error.isNotEmpty() }
+        val error = blackoutError
+        val deliveryAvailable = activityForeground && activityFocused && !modal && pendingWorkId == null
+        val sessionNotices = model.attention.deliver(deliveryAvailable)
+        val workNotices = work.attention.deliver(deliveryAvailable)
         updateMotionSensors(defaults.blackoutEnabled && blackoutLive && blackoutCameraReady &&
             activityForeground && activityFocused && !modal && !error)
         blackout.update(BlackoutPolicy.Input(
@@ -454,9 +469,32 @@ class MainActivity : ComponentActivity() {
             // A return gesture keeps an existing cover until completion. If a real error
             // removes it first, held input still blocks rearming. Consumption markers survive
             // focus loss to swallow orphaned UP events, but are not indefinitely held input.
-            interacting = !blackout.covered && (touchActive || heldKeys.isNotEmpty()),
+            interacting = (!blackout.covered || sessionNotices > 0 || workNotices > 0) && (touchActive || heldKeys.isNotEmpty()),
         ))
-        renderBlackout()
+        if (sessionNotices > 0 || workNotices > 0) blackout.interact()
+        renderBlackout() // Reveal and restore bars before exposing/announcing the notice.
+        renderAttentionDestinations()
+        if (sessionNotices > 0 || workNotices > 0) {
+            val destinations = listOfNotNull("Sessions".takeIf { sessionNotices > 0 }, "Work".takeIf { workNotices > 0 }).joinToString(" and ")
+            attentionNotice.visibility = View.VISIBLE
+            attentionNotice.text = "New attention in $destinations. Open $destinations for details; recording controls are unchanged."
+        }
+    }
+
+    private fun renderAttentionDestinations() {
+        val sessions = maxOf(model.attention.snapshot.count,
+            model.sessions.value.orEmpty().count { it.canRetry || it.error.isNotEmpty() })
+        val workCount = maxOf(work.attention.snapshot.count, if (work.state.value?.error != null) 1 else 0)
+        val sessionsLabel = if (sessions > 0) "Sessions · attention ($sessions)" else "Sessions"
+        val workLabel = if (workCount > 0) "Work · attention ($workCount)" else "Work"
+        if (sessionsButton.text.toString() != sessionsLabel) sessionsButton.text = sessionsLabel
+        if (workButton.text.toString() != workLabel) workButton.text = workLabel
+        sessionAttentionDetails?.let { view ->
+            val detail = model.attention.snapshot.details.values.distinct().joinToString("\n")
+            if (view.text.toString() != detail) view.text = detail
+            (view.parent as? View)?.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
+        }
+        if (sessions == 0 && workCount == 0) attentionNotice.visibility = View.GONE
     }
 
     private fun renderBlackout() {
@@ -701,6 +739,8 @@ class MainActivity : ComponentActivity() {
     private fun showSessions() {
         if (sessionsView != null) return
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)) }
+        sessionAttentionDetails = label("", 14f).apply { contentDescription = "Sessions attention details" }
+        panel.addView(ScrollView(this).apply { addView(sessionAttentionDetails) }, LinearLayout.LayoutParams(-1, dp(96)))
         listOf(backlog, export, open, discard).forEach { (it.parent as? android.view.ViewGroup)?.removeView(it); panel.addView(it) }
         val view = SessionsView(this, open = { openSessionVideo(it.id) }, retry = { model.retrySession(it.id) }, delete = {
             confirmDelete(it.id, "Delete ${it.retained} retained source photos and cancel queued work? Published video and other sessions are unchanged. Unknown files stop deletion.")
@@ -711,7 +751,7 @@ class MainActivity : ComponentActivity() {
         panel.addView(view, LinearLayout.LayoutParams(-1, 0, 1f)); sessionsView = view; view.render(model.sessions.value.orEmpty())
         AlertDialog.Builder(this).setTitle("Sessions").setView(panel).setPositiveButton("Close", null).create().apply {
             setOnShowListener { window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.90).toInt()) }
-            showBlackoutModal(this) { sessionsView = null }
+            showBlackoutModal(this) { sessionsView = null; sessionAttentionDetails = null }
         }
     }
     private fun showRecordingLinks(id: String) {

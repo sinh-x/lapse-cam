@@ -17,6 +17,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     data class State(val snapshot: WorkSnapshot = WorkSnapshot(), val loaded: Boolean = false,
         val message: String = "Loading work…", val error: String? = null, val reminder: String = "",
         val reminderAccess: TimeboxReminderAccess? = null, val editRevisions: Map<String, Long> = emptyMap())
+    internal val attention = DisplayAttention()
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val store = WorkSessionStore(files)
@@ -44,7 +45,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
         if (editSaving) return
         val buffer = checkNotNull(savedEditor)
         editSaving = true
-        submit("Changes saved", after = {
+        submit("Changes saved", attentionKey = "edit:${buffer.original.id}", after = {
             editSaving = false; savedEditor = null
             // A recreated view, not just the original callback, observes completion.
             mutableState.value = state.value
@@ -63,7 +64,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
             runCatching { observer(store.load(), now()) }
         }
     }
-    internal fun applySharedMetadata(records: List<org.json.JSONObject>) = submit("Shared descriptions saved") {
+    internal fun applySharedMetadata(records: List<org.json.JSONObject>) = submit("Shared descriptions saved", attentionKey = "shared-metadata") {
         var next = store.load()
         for (record in records) {
             val id = record.getString("id")
@@ -72,7 +73,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
         }
         store.commit(next)
     }
-    internal fun copyShared(draft: WorkDraft) = submit("Copied as new local planned timebox") {
+    internal fun copyShared(draft: WorkDraft) = submit("Copied as new local planned timebox", attentionKey = "copy:${draft.id}") {
         val next = store.load()
         // Do not overwrite an unrelated in-progress draft.
         store.commit(next.copy(records = next.records + draft.validated(now().epoch).copy(title = draft.title, outcome = draft.outcome.ifEmpty { null })))
@@ -99,45 +100,49 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     fun edit(draft: WorkDraft) {
         editorDraft = draft
         mutableState.value = (state.value ?: State()).copy(message = "Saving…")
-        submit("Saved") { store.saveDraft(draft) }
+        submit("Saved", attentionKey = "draft:${draft.id}") { store.saveDraft(draft) }
     }
     fun save(draft: WorkDraft, done: (String) -> Unit) {
         editorDraft = draft
-        submit("Saved", after = {
+        submit("Saved", attentionKey = "save:${draft.id}", after = {
+            attention.resolve("draft:${draft.id}")
+            attention.resolve("discard:${draft.id}")
             if (editorDraft?.id == draft.id) editorDraft = null
             done(draft.id)
         }) { store.saveDraft(draft); store.save(draft.id, now().epoch) }
     }
-    fun discard(id: String, done: () -> Unit) = submit("Draft discarded", after = {
+    fun discard(id: String, done: () -> Unit) = submit("Draft discarded", attentionKey = "discard:$id", after = {
+        attention.resolve("draft:$id")
+        attention.resolve("save:$id")
         if (editorDraft?.id == id) editorDraft = null
         done()
     }) { store.discard(id) }
-    fun archive(id: String, archived: Boolean, done: () -> Unit = {}) = submit(if (archived) "Timebox archived" else "Timebox restored", after = done) {
+    fun archive(id: String, archived: Boolean, done: () -> Unit = {}) = submit(if (archived) "Timebox archived" else "Timebox restored", attentionKey = "archive:$id", after = done) {
         store.archive(id, archived)
     }
-    fun delete(id: String, done: () -> Unit = {}) = submit("Timebox deleted; photos and videos unchanged", after = done) {
+    fun delete(id: String, done: () -> Unit = {}) = submit("Timebox deleted; photos and videos unchanged", attentionKey = "delete:$id", after = done) {
         store.delete(id)
     }
     fun start(id: String, replace: String? = null) {
         val event = runCatching(::now).getOrElse { return }
-        submit("Saved") { store.commit(TimeboxPolicy.start(store.load(), id, event, replace)) }
+        submit("Saved", attentionKey = "start:$id") { store.commit(TimeboxPolicy.start(store.load(), id, event, replace)) }
     }
     fun end(id: String) {
         val event = runCatching(::now).getOrElse { return }
-        submit("Saved") { store.commit(TimeboxPolicy.end(store.load(), id, event)) }
+        submit("Saved", attentionKey = "end:$id") { store.commit(TimeboxPolicy.end(store.load(), id, event)) }
     }
     fun reconcile() {
         val event = runCatching(::now).getOrElse { return }
         submit("Saved", clearError = false) { store.commit(TimeboxPolicy.reconcile(store.load(), event)) }
     }
-    fun expire(id: String, done: () -> Unit) = submit("Saved", finished = done) {
+    fun expire(id: String, done: () -> Unit) = submit("Saved", attentionKey = "expiry:$id", finished = done) {
         val old = store.load()
         if (old.running?.id == id) store.commit(TimeboxPolicy.reconcile(old, now())) else old
     }
     /** Called once at actual admission, never by preview/navigation. */
     fun captureStarted(recordingId: String, moment: WorkMoment): String {
         val id = UUID.randomUUID().toString()
-        submit("Saved") {
+        submit("Saved", attentionKey = "capture-context:$id") {
             check(captureSpan == null) { "Overlapping capture spans" }
             val next = store.commit(store.load().copy(spans = store.load().spans + RecordingSpan(id, recordingId, moment)))
             captureSpan = id
@@ -146,7 +151,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
         return id
     }
     /** Only the first committed frame writes work context, using its shutter anchor, not callback time. */
-    fun photoCommitted(id: String, shutter: WorkMoment) = submit("Saved") {
+    fun photoCommitted(id: String, shutter: WorkMoment) = submit("Saved", attentionKey = "capture-context:$id") {
         val old = store.load()
         val span = old.spans.single { it.id == id }
         if (span.firstPhoto != null || id in completedSpans) old else {
@@ -157,7 +162,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
             next
         }
     }
-    fun captureCheckpoint(id: String, moment: WorkMoment) = submit("Saved") {
+    fun captureCheckpoint(id: String, moment: WorkMoment) = submit("Saved", attentionKey = "capture-context:$id") {
         val old = store.load()
         store.commit(old.copy(spans = old.spans.map { span ->
             if (span.id == id && span.firstPhoto != null && span.endElapsed == null && moment.boot == span.admitted.boot)
@@ -169,7 +174,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
         worker.shutdown()
         check(worker.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS))
     }
-    fun captureStopped(id: String, moment: WorkMoment) = submit("Saved") {
+    fun captureStopped(id: String, moment: WorkMoment) = submit("Saved", attentionKey = "capture-context:$id") {
         val old = store.load()
         val span = old.spans.single { it.id == id }
         check(moment.boot == span.admitted.boot)
@@ -179,7 +184,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
         next
     }
 
-    private fun submit(message: String, after: () -> Unit = {}, finished: () -> Unit = {}, clearError: Boolean = true,
+    private fun submit(message: String, attentionKey: String = "store", after: () -> Unit = {}, finished: () -> Unit = {}, clearError: Boolean = true,
         failed: () -> Unit = {}, operation: () -> WorkSnapshot) {
         worker.execute {
             try {
@@ -212,6 +217,11 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
                     val liveDraft = editorDraft
                     val acknowledged = liveDraft == null || next.draft == liveDraft || next.records.any { it.id == liveDraft.id }
                     val error = if (clearError && acknowledged) null else state.value?.error
+                    if (clearError && acknowledged) {
+                        attention.resolve(attentionKey)
+                        // A successful explicit write also proves recovery of shared store I/O.
+                        attention.resolve("store")
+                    }
                     mutableState.value = State(next, true, if (error != null) "Not saved" else if (message == "Saved" && !acknowledged) "Saving…" else message, error, reminder, reminderAccess, revisions)
                     after(); finished()
                 }
@@ -223,6 +233,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
                 main.post {
                     failed()
                     val current = state.value ?: State()
+                    attention.failure(attentionKey, "Work error: ${error.message}. Retained data; camera remains independent.")
                     mutableState.value = current.copy(snapshot = recovered ?: current.snapshot, editRevisions = revisions,
                         error = "Work error: ${error.message}. Retained data; camera remains independent.", message = "Not saved")
                     finished()
