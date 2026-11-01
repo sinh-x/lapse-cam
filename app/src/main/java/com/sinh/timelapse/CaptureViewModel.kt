@@ -60,6 +60,9 @@ class CaptureViewModel @JvmOverloads constructor(
         val video: Uri? = null,
         val switching: Boolean = false,
     ) {
+        val blackoutSafetyError: Boolean get() = recoveryBlocked || cameraMessage.isNotEmpty() ||
+            queueSafetyBlocked || sessionSafetyBlocked || messageImpact == CaptureMessageImpact.CAPTURE_SAFETY ||
+            messageImpact == CaptureMessageImpact.UNKNOWN
         val busy: Boolean get() = loading || working || savingPhoto || exporting
         val lens: SessionLens get() = session?.lens ?: selectedLens
         val canSelectLens: Boolean get() = CapturePolicy.canSelectLens(session != null, busy, recoveryBlocked)
@@ -165,7 +168,7 @@ class CaptureViewModel @JvmOverloads constructor(
 
     fun retryRecovery() {
         if (current.busy || !current.recoveryBlocked) return
-        update(current.copy(loading = true, message = "Retrying saved session recovery…"))
+        update(current.copy(loading = true, messageImpact = CaptureMessageImpact.ROUTINE, message = "Retrying saved session recovery…"))
         recover()
     }
 
@@ -240,7 +243,7 @@ class CaptureViewModel @JvmOverloads constructor(
     fun attachCamera(capture: ImageCapture?, lens: SessionLens? = null, message: String = "") {
         val usable = capture != null && lens == current.lens && !current.loading && !current.recoveryBlocked
         imageCapture = if (usable) capture else null
-        if (!usable) stop("Camera unavailable. Saved photos are kept.")
+        if (!usable) stop("Camera unavailable. Saved photos are kept.", CaptureMessageImpact.CAPTURE_SAFETY)
         update(current.copy(boundLens = if (usable) lens else null, cameraMessage = message))
     }
 
@@ -253,7 +256,7 @@ class CaptureViewModel @JvmOverloads constructor(
         split: SessionSplit = SessionSplit.OFF) {
         if (current.busy || current.capturing || current.recoveryBlocked) return
         if (!cameraReady()) {
-            update(current.copy(message = "Allow camera access and wait for the preview first."))
+            update(current.copy(messageImpact = CaptureMessageImpact.CAPTURE_SAFETY, message = "Allow camera access and wait for the preview first."))
             return
         }
         if (current.session != null) {
@@ -262,7 +265,7 @@ class CaptureViewModel @JvmOverloads constructor(
         }
         val lens = current.lens
         val request = ++captureRequest
-        update(current.copy(working = true, message = "Creating session…"))
+        update(current.copy(working = true, messageImpact = CaptureMessageImpact.ROUTINE, message = "Creating session…"))
         worker.execute {
             try {
                 val session = store.create(configuration, lens, appearance, SessionSplit.forConfiguration(configuration, split))
@@ -273,7 +276,7 @@ class CaptureViewModel @JvmOverloads constructor(
                     update(current.copy(working = false, session = session, frames = 0, missedSlots = 0))
                     applySnapshot(snapshot)
                     if (request == captureRequest && cameraReady()) beginCapture()
-                    else update(current.copy(message = "Session ready. Tap Resume capture."))
+                    else update(current.copy(messageImpact = CaptureMessageImpact.ROUTINE, message = "Session ready. Tap Resume capture."))
                 }
             } catch (error: Exception) {
                 post {
@@ -301,7 +304,7 @@ class CaptureViewModel @JvmOverloads constructor(
         capturePhoto()
     }
 
-    fun stop(message: String = "Capture paused. Export or resume when ready.") {
+    fun stop(message: String = "Capture paused. Export or resume when ready.", impact: CaptureMessageImpact = CaptureMessageImpact.ROUTINE) {
         resumeAfterClose = false
         captureRequest++
         main.removeCallbacks(nextCapture)
@@ -310,15 +313,17 @@ class CaptureViewModel @JvmOverloads constructor(
             workSpan = null
             if (span != null) runCatching { workContext?.let { it.captureStopped(span, it.now()) } }
             var pauseMessage = message
+            var pauseImpact = impact
             val active = try { activeClock.stop() } catch (_: ArithmeticException) {
                 val known = current.activeMillis ?: 0
                 activeClock.restore(known)
                 update(current.copy(recoveryBlocked = true))
+                pauseImpact = CaptureMessageImpact.CAPTURE_SAFETY
                 pauseMessage = "Active-time arithmetic exhausted. Paused with photos retained; inspect recovery metadata."
                 known
             }
             val session = current.session
-            update(current.copy(capturing = false, activeMillis = if (session?.version == 3) active else null, message = pauseMessage))
+            update(current.copy(capturing = false, activeMillis = if (session?.version == 3) active else null, messageImpact = pauseImpact, message = pauseMessage))
             if (session != null) worker.execute {
                 try { store.checkpoint(session, active, false); repository.checkpointSession(session, false); refreshManualReview(session) }
                 catch (error: Exception) { post { fail(error, true) } }
@@ -364,6 +369,7 @@ class CaptureViewModel @JvmOverloads constructor(
                     update(current.copy(session = next, working = false, switching = false, frames = 0, selectedFrames = 0,
                         savedBytes = 0, activeMillis = if (next == null) null else 0, wallMillis = 0, unknownTail = false,
                         thinningStage = 0, nominalIntervalMillis = 500, missedSlots = 0,
+                        messageImpact = CaptureMessageImpact.ROUTINE,
                         message = "Session closed. Switching work: ${monotonicMillis() - switchingStarted}ms. Export queued; keep the app open."))
                     if (snapshot != null) applySnapshot(snapshot)
                     if (next != null && resume && cameraReady()) beginCapture() else switchingSince = null
@@ -383,7 +389,7 @@ class CaptureViewModel @JvmOverloads constructor(
 
     private fun capturePhoto() {
         if (!current.capturing || current.savingPhoto || !foreground || boundaryReached()) return
-        if (!cameraReady()) return stop("Selected camera unavailable. Saved photos are kept.")
+        if (!cameraReady()) return stop("Selected camera unavailable. Saved photos are kept.", CaptureMessageImpact.CAPTURE_SAFETY)
         val camera = imageCapture ?: return
         val session = current.session ?: return
         val request = captureRequest
@@ -398,7 +404,7 @@ class CaptureViewModel @JvmOverloads constructor(
                         drainClose()
                     } else if (!enoughSpace) {
                         update(current.copy(savingPhoto = false))
-                        stop("Storage is almost full. Capture stopped; export or free space.")
+                        stop("Storage is almost full. Capture stopped; export or free space.", CaptureMessageImpact.CAPTURE_SAFETY)
                     } else requestPhoto(camera, session)
                 }
             } catch (error: Exception) {
@@ -493,7 +499,7 @@ class CaptureViewModel @JvmOverloads constructor(
     fun export() {
         val session = current.session ?: return
         if (current.busy || current.capturing || current.recoveryBlocked || current.frames == 0 || session.split != SessionSplit.OFF) return
-        update(current.copy(exporting = true, progress = 0, message = "Exporting MP4. Keep the app open…"))
+        update(current.copy(exporting = true, progress = 0, messageImpact = CaptureMessageImpact.ROUTINE, message = "Exporting MP4. Keep the app open…"))
         worker.execute {
             try {
                 check(exportQueue?.beginManual() == true) { "Automatic export busy. Try manual export when it finishes" }
@@ -508,7 +514,7 @@ class CaptureViewModel @JvmOverloads constructor(
                         }
                         rememberVideo(uri, session.directory.name)
                         worker.execute { refreshManualReview(session); publishSessions() }
-                        post { update(current.copy(exporting = false, video = uri,
+                        post { update(current.copy(exporting = false, video = uri, messageImpact = CaptureMessageImpact.ROUTINE,
                             message = "Saved to Movies/TimestampTimelapse. Photos kept for re-export.")) }
                     } catch (error: Exception) { post { fail(error) } }
                     finally { worker.execute { exportQueue?.endManual() } }
@@ -580,10 +586,12 @@ class CaptureViewModel @JvmOverloads constructor(
         worker.execute {
             try {
                 val record = repository.get(id)
-                // Explicit user cycle, not an automatic queue attempt. Its next failure may notify.
-                post { attention.resolve(SessionAttentionPolicy.key(record)); attention.resolve("retry:$id") }
-                if (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()) repository.put(record.copy(error = ""))
-                else exportQueue?.retry(id)
+                post { attention.resolve("retry:$id") }
+                val admitted = if (record.phase == SessionPhase.DELETING && record.error.isNotEmpty()) {
+                    repository.put(record.copy(error = "")); true
+                } else exportQueue?.retry(id) == true
+                // Only an admitted explicit cycle, never an automatic attempt or rejected tap.
+                if (admitted) post { attention.resolve(SessionAttentionPolicy.key(record)) }
                 publishSessions()
             }
             catch (error: Exception) { post {
@@ -618,6 +626,7 @@ class CaptureViewModel @JvmOverloads constructor(
                         activeClock.restore(0)
                         update(current.copy(working = false, session = null, frames = 0, selectedFrames = 0, savedBytes = 0,
                             activeMillis = null, wallMillis = 0, unknownTail = false, thinningStage = 0,
+                            messageImpact = CaptureMessageImpact.ROUTINE,
                             message = "Source deletion confirmed. Exported videos unchanged; see Sessions for progress."))
                     }
                 }

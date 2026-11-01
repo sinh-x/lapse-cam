@@ -57,13 +57,14 @@ internal class SessionExportQueue(
         }
     }
 
-    fun retry(id: String) {
+    fun retry(id: String): Boolean {
         val record = repository.get(id)
-        if (running == id || record.busy || record.phase != SessionPhase.NEEDS_ATTENTION || !record.cycle.exhausted) return
+        if (running == id || record.busy || record.phase != SessionPhase.NEEDS_ATTENTION || !record.cycle.exhausted) return false
         repository.put(record.withCycle(record.cycle.manualRetry()).copy(
             phase = if (record.cleanupOnly) SessionPhase.CLEANUP else SessionPhase.QUEUED, error = ""))
         notifyChanged(running, 0)
         pump()
+        return true
     }
 
     fun pump() {

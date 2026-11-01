@@ -105,11 +105,15 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     fun save(draft: WorkDraft, done: (String) -> Unit) {
         editorDraft = draft
         submit("Saved", attentionKey = "save:${draft.id}", after = {
+            attention.resolve("draft:${draft.id}")
+            attention.resolve("discard:${draft.id}")
             if (editorDraft?.id == draft.id) editorDraft = null
             done(draft.id)
         }) { store.saveDraft(draft); store.save(draft.id, now().epoch) }
     }
     fun discard(id: String, done: () -> Unit) = submit("Draft discarded", attentionKey = "discard:$id", after = {
+        attention.resolve("draft:$id")
+        attention.resolve("save:$id")
         if (editorDraft?.id == id) editorDraft = null
         done()
     }) { store.discard(id) }

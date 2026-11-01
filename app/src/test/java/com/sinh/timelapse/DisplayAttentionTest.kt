@@ -85,6 +85,19 @@ class DisplayAttentionTest {
         }
     }
 
+    @Test fun productionCaptureStateUsesImpactNotDiagnosticKeywords() {
+        val healthy = CaptureViewModel.State(loading = false, capturing = true, boundLens = SessionLens.REAR)
+        for (text in listOf("error storage attention unavailable", "plain diagnostic", "")) {
+            assertFalse(healthy.copy(message = text, messageImpact = CaptureMessageImpact.INDEPENDENT).blackoutSafetyError)
+            assertTrue(healthy.copy(message = text, messageImpact = CaptureMessageImpact.CAPTURE_SAFETY).blackoutSafetyError)
+            assertTrue(healthy.copy(message = text, messageImpact = CaptureMessageImpact.UNKNOWN).blackoutSafetyError)
+        }
+        assertTrue(healthy.copy(queueSafetyBlocked = true).blackoutSafetyError)
+        assertTrue(healthy.copy(sessionSafetyBlocked = true).blackoutSafetyError)
+        assertTrue(healthy.copy(recoveryBlocked = true).blackoutSafetyError)
+        assertTrue(healthy.copy(cameraMessage = "lens lost").blackoutSafetyError)
+    }
+
     @Test fun deliveryAtTwentySecondsResetsDeadlineExactlyOnceAndCannotOverrideSafety() {
         var now = 0L
         val policy = BlackoutPolicy { now }

@@ -292,7 +292,9 @@ internal class WorkSessionsView(
         if (state.error != null) managing = false
         val inForm = page == "setup" || page == "edit"
         if (inForm && titleField == null && state.loaded) { buildPage(); return }
+        val retainedAttention = owner.attention.snapshot.details.values.distinct().filter { it != state.error }.joinToString("\n")
         val status = listOfNotNull(state.error ?: if (saving) { if (page == "edit") "Saving changes…" else "Saving intention…" } else state.message,
+            retainedAttention.takeIf { it.isNotEmpty() },
             state.reminder.takeIf { it.isNotEmpty() && !inForm }).joinToString("\n")
         if (message.text.toString() != status) message.text = status
         if (state.error != null && state.error != announcedError) message.announceForAccessibility(state.error)
