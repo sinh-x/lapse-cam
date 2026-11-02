@@ -463,6 +463,13 @@ class AppBaselineTest {
                 }
                 return elapsed
             }
+            val methodTrace = if (InstrumentationRegistry.getArguments().getString("profileMethods") == "true")
+                File(context.filesDir, "ttl018-ui-methods-${System.currentTimeMillis()}-${UUID.randomUUID()}.trace") else null
+            methodTrace?.let {
+                report(JSONObject().put("event", "method-profile-start").put("file", it.name))
+                Debug.startMethodTracingSampling(it.absolutePath, 32 * 1024 * 1024, 1000)
+            }
+            try {
             if (size <= 1000 || includeLarge) repeat(samples) {
                 sessionOpens.add(openToDraw("sessionsButton", "sessionsView"))
                 sessionBacks.add(backToFeedback())
@@ -473,6 +480,12 @@ class AppBaselineTest {
                 backToFeedback()
             }
             Thread.sleep(3000)
+            } finally {
+                methodTrace?.let {
+                    Debug.stopMethodTracing()
+                    report(JSONObject().put("event", "method-profile-complete").put("file", it.name).put("bytes", it.length()))
+                }
+            }
             onActivity { model.stop("Disposable baseline paused; photos retained") }
             waitFor(observedActivity) { !it.savingPhoto && !it.capturing }
             val barrier = CountDownLatch(1); owner.execute { barrier.countDown() }; check(barrier.await(30, TimeUnit.SECONDS))
@@ -506,7 +519,7 @@ class AppBaselineTest {
                 .put("missedSlots", outcome.missedSlots).put("processPssKiB", memory.totalPss)
                 .put("sessionId", captureId).put("durationMillis", SystemClock.elapsedRealtime() - start)
                 .put("testWindowKeepScreenOn", holdScreen)
-                .put("measurementRevision", "direct-main-v1")
+                .put("measurementRevision", if (methodTrace == null) "direct-main-v1" else "direct-main-v1-sampling-profile")
                 .put("nominalIntervalMillis", outcome.nominalIntervalMillis).put("samplingStage", outcome.thinningStage)
                 .put("healthyDurationMillis", healthyDuration).put("healthyCommittedPhotos", healthyPhotos)
                 .put("healthyModelMissedSlots", healthyMissedEnd - healthyMissedStart)

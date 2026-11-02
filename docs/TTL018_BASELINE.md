@@ -181,7 +181,10 @@ known, stopped fixture captures and an unchanged synthetic index; it never reset
 an old recording, its diagnostics, or attempt budgets. Allocation is journalled
 before creation; an interrupted allocation blocks another preparation. Debug
 `TTL018UI` logs split construction, modal admission and window attachment without
-logging record content.
+logging record content. Optional `profileMethods=true` samples ART methods during
+browser navigation into a unique retained private `.trace` file. These diagnostic
+runs use revision `direct-main-v1-sampling-profile` and must not be pooled with
+unprofiled frozen-budget measurements; profiler overhead changes timing.
 Do not retroactively treat earlier three-sample runs as 30-sample percentiles.
 
 Camera metrics are actual committed JPEG counts/dimensions plus **software
