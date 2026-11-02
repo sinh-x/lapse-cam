@@ -22,7 +22,7 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
     private val recordRevisions = mutableMapOf<String, Long>()
     fun revisions(): Map<String, Long> = recordRevisions.toMap()
     fun editTarget(id: String): WorkEditBuffer = WorkEditBuffer(load().records.single { it.id == id },
-        revision = recordRevisions[id] ?: 0)
+        revision = recordRevisions[id] ?: 0L)
 
     private fun safePaths() {
         check(!Files.isSymbolicLink(root.toPath()) && root.canonicalFile == root.absoluteFile) { "Aliased work root retained" }
@@ -76,7 +76,7 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
             val beforeRecords = snapshot.records.associateBy { it.id }
             val nextRecords = next.records.associateBy { it.id }
             (beforeRecords.keys + nextRecords.keys).forEach { id ->
-                if (beforeRecords[id] != nextRecords[id]) recordRevisions[id] = (recordRevisions[id] ?: 0) + 1
+                if (beforeRecords[id] != nextRecords[id]) recordRevisions[id] = (recordRevisions[id] ?: 0L) + 1L
             }
             check(target.readBytes().contentEquals(bytes)) { "Timebox readback mismatch" }
             snapshot = next
@@ -111,7 +111,8 @@ internal class WorkSessionStore(files: File, private val fault: (String) -> Unit
 
     fun update(edit: WorkEditBuffer): WorkSnapshot {
         val current = load()
-        require(edit.revision == (recordRevisions[edit.original.id] ?: 0)) {
+        // Keep the fallback Long: a boxed Int zero compares unequal to a Long revision on a fresh load.
+        require(edit.revision == (recordRevisions[edit.original.id] ?: 0L)) {
             "This timebox changed. Discard changes and reopen it before editing again"
         }
         return commit(WorkEditPolicy.update(current, edit.original, edit.draft))

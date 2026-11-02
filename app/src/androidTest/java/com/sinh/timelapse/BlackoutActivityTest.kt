@@ -364,7 +364,9 @@ class BlackoutActivityTest {
 
     private fun reviews(vararg values: Pair<String, Boolean>): List<SessionReview> = values.mapIndexed { index, (error, retry) ->
         SessionReview("fixture-$index", 0, "Adaptive", 30, 30, 1000, false, 2, 3, 3, 4096, 0,
-            "Needs attention", 0, 3, 2, error, "content://fixture/video/$index", retry, true)
+            "Needs attention", 0, 3, 2, error, "content://fixture/video/$index", retry, true,
+            processing = SessionProcessing(hydrated = true, issues = listOf(SessionIssue(ProcessingStage.UNKNOWN,
+                error.ifEmpty { "Historical failure without recorded reason" }))))
     }
     private fun publishReviews(owner: CaptureViewModel, reviews: List<SessionReview>) {
         @Suppress("UNCHECKED_CAST")
@@ -398,9 +400,14 @@ class BlackoutActivityTest {
                 call(activity, "showSessions")
                 assertEquals(View.GONE, f.cover.visibility); assertNull(f.policy.timer)
                 val view = WorkUiFixtures.field<SessionsView>(activity, "sessionsView")
-                val children = WorkUiFixtures.descendants(view)
-                assertTrue(children.filterIsInstance<TextView>().any { it.text.contains("Interrupted partial cleanup") && it.text.contains("cleanup attempts 2/3") })
-                assertEquals(2, children.filterIsInstance<Button>().count { it.text == "Retry" && it.isEnabled })
+                view.showSession(saved.first().id)
+                assertTrue(WorkUiFixtures.descendants(view).filterIsInstance<TextView>().any {
+                    it.text.contains("Interrupted partial cleanup") && it.text.contains("cleanup attempts 2/3")
+                })
+                saved.forEach { review ->
+                    view.showSession(review.id)
+                    assertEquals(review.canRetry, WorkUiFixtures.descendants(view).filterIsInstance<Button>().single { it.text == "Retry" }.isEnabled)
+                }
                 assertEquals(saved, owner.sessions.value)
             } finally { publishReviews(owner, emptyList()) }
         } }
@@ -436,7 +443,7 @@ class BlackoutActivityTest {
                 call(activity, "updateBlackout")
                 assertEquals(View.GONE, f.cover.visibility)
                 assertEquals(80_000L, f.policy.timer!!.deadline)
-                assertTrue(notice.text.contains("Work"))
+                assertTrue(notice.text.contains("Timeboxes"))
                 val workTimer = f.policy.timer
                 repeat(30) {
                     work.attention.failure("store", "Work-only failure $it")
@@ -505,7 +512,7 @@ class BlackoutActivityTest {
                     assertSame(owner, ViewModelProvider(activity)[CaptureViewModel::class.java])
                     set(activity, "activityForeground", true); activity.onWindowFocusChanged(true)
                     assertEquals(0, owner.attention.snapshot.pending)
-                    assertTrue(WorkUiFixtures.field<Button>(activity, "sessionsButton").text.contains("attention"))
+                    assertTrue(WorkUiFixtures.field<Button>(activity, "sessionsButton").text.contains("notices"))
                     assertEquals(View.VISIBLE, WorkUiFixtures.field<TextView>(activity, "attentionNotice").visibility)
                     assertEquals(View.GONE, WorkUiFixtures.field<View>(activity, "blackoutCover").visibility)
                 }

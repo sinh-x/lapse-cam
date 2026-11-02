@@ -119,6 +119,22 @@ class WorkSessionStoreTest {
         assertThrows(IllegalArgumentException::class.java) { store.update(endedEdit) }
         assertArrayEquals(deleted, file.readBytes()); assertEquals(create, store.load().draft)
     }
+    @Test fun loadedZeroRevisionAllowsEditingButArchiveRoundTripStillRejectsStaleEditor() = isolated { root ->
+        val draft = WorkDraft(title = "Loaded edit")
+        WorkSessionStore(root).apply { saveDraft(draft); save(draft.id, 123) }
+        val loaded = WorkSessionStore(root)
+        val edit = loaded.editTarget(draft.id)
+        assertEquals(0L, edit.revision)
+        assertFalse(loaded.revisions().containsKey(draft.id))
+        loaded.update(edit.copy(draft = edit.draft.copy(title = "Edited after reload")))
+        val stale = loaded.editTarget(draft.id)
+        loaded.archive(draft.id, true); loaded.archive(draft.id, false)
+        val file = File(root, "work-context/state.json"); val published = file.readBytes()
+        assertThrows(IllegalArgumentException::class.java) { loaded.update(stale.copy(draft = stale.draft.copy(title = "Stale"))) }
+        assertArrayEquals(published, file.readBytes())
+        assertEquals("Edited after reload", WorkSessionStore(root).load().records.single().title)
+    }
+
     @Test fun editPublicationFaultsReloadBeforeRetryAndNeverOverwritePublishedChanges() = isolated { root ->
         val store = WorkSessionStore(root)
         val draft = WorkDraft(title = "Fault fixture")

@@ -32,7 +32,7 @@ class WorkSessionCoordinator internal constructor(private val app: Application, 
     fun beginSavedEdit(original: WorkSession) {
         check(Looper.myLooper() == Looper.getMainLooper())
         check(!editSaving && original.state != WorkState.RUNNING)
-        savedEditor = WorkEditBuffer(original, revision = state.value?.editRevisions?.get(original.id) ?: 0)
+        savedEditor = WorkEditBuffer(original, revision = state.value?.editRevisions?.get(original.id) ?: 0L)
     }
     fun editSavedDraft(draft: WorkDraft) {
         check(!editSaving)

@@ -30,6 +30,17 @@ admit background processing. The tests require both the isolated package and
 instrumentation argument `ttl018Baseline=true`; without the argument they are
 explicitly skipped opt-in benchmarks, not routine regression passes.
 
+## Empty-context functional UI checks
+
+When baseline recordings must be retained, an independently authorized
+`-Pttl018Functional=true` debug build uses `com.sinh.timelapse.ttl018functional`
+(and `.test`), labelled `TTL-018 Functional (disposable)`. It is mutually exclusive
+with the baseline property. It does not change normal/release identity or copy,
+clear, or migrate baseline data. Existing empty-context guards remain enforced;
+never clear recordings to make them pass. CAMERA permission for preview requires
+separate approval; these synthetic UI tests do not establish real capture UAT.
+The opt-in baseline/capture harness rejects this functional package.
+
 ## Build and selected execution
 
 With the pinned offline JDK/SDK environment:

@@ -8,6 +8,11 @@ val ttl018Baseline = providers.gradleProperty("ttl018Baseline").orNull?.let {
     require(it == "true") { "ttl018Baseline accepts only true (or omit the property)" }
     true
 } ?: false
+val ttl018Functional = providers.gradleProperty("ttl018Functional").orNull?.let {
+    require(it == "true") { "ttl018Functional accepts only true (or omit the property)" }
+    true
+} ?: false
+require(!(ttl018Baseline && ttl018Functional)) { "Select exactly one isolated context" }
 
 android {
     namespace = "com.sinh.timelapse"
@@ -27,6 +32,9 @@ android {
             if (ttl018Baseline) {
                 applicationIdSuffix = ".ttl018baseline"
                 manifestPlaceholders["appLabel"] = "TTL-018 Baseline (disposable)"
+            } else if (ttl018Functional) {
+                applicationIdSuffix = ".ttl018functional"
+                manifestPlaceholders["appLabel"] = "TTL-018 Functional (disposable)"
             }
         }
         release {
