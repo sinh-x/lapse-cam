@@ -117,6 +117,43 @@ class AppBaselineTest {
             .put("timeboxes", nextWork.size).put("retainedCaptureSessions", captures.size))
     }
 
+    @Test fun prepareFreshCaptureFixture() {
+        admitted()
+        // Separate process before launch; retain every prior capture, failure and synthetic record.
+        val files = context.filesDir.canonicalFile
+        val store = SessionStore(files)
+        val fixture = JSONObject(marker.readText())
+        check(fixture.getInt("version") == 1 && !fixture.has("pendingCaptureFixture"))
+        val synthetic = strings(fixture.getJSONArray("sessions"))
+        val captures = strings(fixture.getJSONArray("captures"))
+        check(synthetic.size == size && store.directories().map { it.name }.toSet() == (synthetic + captures).toSet())
+        check(SessionRepository.sha256(File(files, "session-index.json")) == fixture.getString("indexSha"))
+        val snapshot = WorkSessionStore(files).load()
+        check(snapshot.running == null && snapshot.draft == null && snapshot.deletedIds.isEmpty())
+        check(snapshot.records.map { it.id }.toSet() == strings(fixture.getJSONArray("timeboxes")).toSet())
+        check(snapshot.spans.all { it.recordingId in captures })
+        val previousStarts = captures.map { id ->
+            val directory = File(File(files, "sessions"), id)
+            val previous = store.load(directory, false)
+            check(previous.split == SessionSplit.OFF && previous.configuration == SamplingConfiguration.Adaptive(30, 15))
+            check(!SessionRepository.readJson(File(directory, "progress.json")).getBoolean("running"))
+            previous.startedAt
+        }
+        val now = System.currentTimeMillis()
+        check(previousStarts.all { it < now }) { "Wall clock moved backwards; retain existing fixtures" }
+        val id = "$now-${UUID.randomUUID()}"
+        // Journal allocation first. Interrupted preparation blocks further preparation, never silent adoption.
+        fixture.put("captures", JSONArray(captures + id)).put("pendingCaptureFixture", id)
+        SessionRepository.atomicJson(marker, fixture)
+        val session = store.create(SamplingConfiguration.Adaptive(30, 15), SessionLens.REAR,
+            TimestampAppearance(), SessionSplit.OFF, id)
+        check(store.snapshot(session).count == 0)
+        fixture.remove("pendingCaptureFixture")
+        SessionRepository.atomicJson(marker, fixture)
+        report(JSONObject().put("event", "fresh-capture-prepared").put("sessionId", id)
+            .put("retainedPriorCaptureSessions", captures.size).put("syntheticSessions", size))
+    }
+
     private class OwnerProbe(private val delegate: ExecutorService) : AbstractExecutorService() {
         val queued = AtomicInteger(); val maxQueued = AtomicInteger()
         val taskMillis = java.util.Collections.synchronizedList(mutableListOf<Long>())

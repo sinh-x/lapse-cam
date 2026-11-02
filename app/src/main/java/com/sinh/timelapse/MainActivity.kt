@@ -747,13 +747,17 @@ class MainActivity : ComponentActivity() {
 
     private fun showWork(id: String? = null) {
         if (workDialog != null) return
+        val began = android.os.SystemClock.elapsedRealtime()
         val view = WorkSessionsView(this, work, { model.sessions.value.orEmpty() }, ::openSessionVideo,
             ::configureTimeboxNotifications, ::configureBackgroundTiming, id)
+        val constructed = android.os.SystemClock.elapsedRealtime()
         workView = view; topBrowser = "timeboxes"
         modalDepth++; updateBlackout()
+        val admitted = android.os.SystemClock.elapsedRealtime()
         workDialog = WorkDialog(this, view) {
             workView = null; workDialog = null; topBrowser = if (sessionsView != null) "sessions" else "camera"; modalDepth--; updateBlackout()
         }.apply { show() }
+        debugBrowserTiming("Timeboxes", began, constructed, admitted)
     }
     private fun renderWork() {
         if (!::workTitle.isInitialized) return
@@ -809,6 +813,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun showSessions() {
         if (sessionsView != null) return
+        val began = android.os.SystemClock.elapsedRealtime()
         val view = SessionsView(this, open = { openSessionVideo(it.id) }, retry = { model.retrySession(it.id) }, delete = {
             confirmDelete(it.id, "Delete ${it.retained} retained source photos and cancel queued work? Published video and other sessions are unchanged. Unknown files stop deletion.")
         }, linkedWork = ::showRecordingLinks, linkSummary = { id ->
@@ -824,11 +829,19 @@ class MainActivity : ComponentActivity() {
             if (state?.recoveryBlocked == true) "Session metadata unavailable. Data retained; see Camera recovery." else "Loading saved sessions…")
         view.evidenceUnavailable(model.outputReviewError.value != null)
         view.render(model.sessions.value.orEmpty())
+        val constructed = android.os.SystemClock.elapsedRealtime()
         modalDepth++; updateBlackout()
+        val admitted = android.os.SystemClock.elapsedRealtime()
         sessionsDialog = SessionsDialog(this, view) {
             sessionsView = null; sessionsDialog = null; sessionAttentionDetails = null
             topBrowser = if (workView != null) "timeboxes" else "camera"; modalDepth--; updateBlackout()
         }.also { it.show() }
+        debugBrowserTiming("Sessions", began, constructed, admitted)
+    }
+    private fun debugBrowserTiming(surface: String, began: Long, constructed: Long, admitted: Long) {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            android.util.Log.d("TTL018UI", "$surface construct=${constructed - began} modal=${admitted - constructed} window=${android.os.SystemClock.elapsedRealtime() - admitted}")
+        }
     }
     private fun routeSessions(value: Intent) {
         val id = value.getStringExtra("sessionId")

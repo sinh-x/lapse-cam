@@ -174,7 +174,14 @@ The run records healthy/browsing durations, committed-photo counts/rate ratio
 and separately labelled model-reported missed slots. The latter is not a
 hardware-sensor missed-frame counter. A supported blackout reveal action is
 performed before opening a browser if needed, and capture/cover state is checked
-through each browser/Back transition.
+through each browser/Back transition. If a retained recording is approaching its
+Adaptive frame cap, `prepareFreshCaptureFixture` allocates a new empty manual
+recording in a separate process in this same opt-in isolated package. It requires
+known, stopped fixture captures and an unchanged synthetic index; it never resets
+an old recording, its diagnostics, or attempt budgets. Allocation is journalled
+before creation; an interrupted allocation blocks another preparation. Debug
+`TTL018UI` logs split construction, modal admission and window attachment without
+logging record content.
 Do not retroactively treat earlier three-sample runs as 30-sample percentiles.
 
 Camera metrics are actual committed JPEG counts/dimensions plus **software
