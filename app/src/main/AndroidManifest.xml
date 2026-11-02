@@ -11,7 +11,7 @@
     <application
         android:allowBackup="false"
         android:usesCleartextTraffic="false"
-        android:label="@string/app_name"
+        android:label="${appLabel}"
         android:icon="@drawable/ic_timelapse"
         android:theme="@style/Theme.TimestampTimelapse"
         android:supportsRtl="true">

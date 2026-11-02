@@ -51,6 +51,16 @@ internal class SyncStore(files: File, private val mayInitialize: () -> Boolean =
             return JSONObject(checkNotNull(state).toString())
         } catch (e: Exception) { blocked = true; throw e }
     }
+    /** Validate an already loaded no-op observation without allocating another mutable state clone. */
+    fun validateUnchanged() {
+        SyncThreads.io()
+        check(!blocked) { "Sync recovery required; bytes retained" }
+        try {
+            check(state != null && known != null) { "Sync identity must be loaded before no-op validation" }
+            paths()
+            check((if (file.exists()) file.readBytes() else null).contentEquals(known)) { "Sync bytes changed outside owner" }
+        } catch (error: Exception) { blocked = true; throw error }
+    }
     private fun validate(s: JSONObject) {
         check(s.keys().asSequence().toSet() == setOf("version", "device", "enabled", "endpoint", "credential",
             "pending", "sources", "exports", "history", "lastSuccess", "lowStorage"))

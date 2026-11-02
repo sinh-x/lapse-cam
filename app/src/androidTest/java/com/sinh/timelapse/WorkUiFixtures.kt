@@ -10,8 +10,15 @@ import org.junit.Assert.*
 
 /** Local configuration fixtures are not phone/UAT evidence. Never operate valuable app state. */
 internal object WorkUiFixtures {
-    fun descendants(view: View): List<View> = listOf(view) + if (view is ViewGroup)
-        (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
+    fun descendants(view: View): List<View> {
+        val children = if (view is ViewGroup)
+            (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
+        // Configured headers exist before ListView mounts them. Do not inflate any lazy data rows.
+        val headers = if (view is android.widget.ListView && view.adapter != null)
+            (0 until view.headerViewsCount).map { view.adapter.getView(it, null, view) }
+                .filter { it !in children }.flatMap(::descendants) else emptyList()
+        return (listOf(view) + children + headers).distinct()
+    }
     fun <T> field(activity: MainActivity, name: String): T {
         @Suppress("UNCHECKED_CAST")
         return MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity) as T

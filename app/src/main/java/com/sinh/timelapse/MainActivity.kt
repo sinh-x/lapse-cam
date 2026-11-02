@@ -71,11 +71,21 @@ class MainActivity : ComponentActivity() {
     private lateinit var split: Spinner
     private lateinit var finish: Button
     private lateinit var backlog: TextView
+    private var backlogSource: List<SessionReview>? = null
+    private var backlogMode = -1
+    private var attentionSource: List<SessionReview>? = null
+    private var actionableSessionCount = 0
     private lateinit var sessionsButton: Button
     private lateinit var workButton: Button
     private lateinit var attentionNotice: TextView
+    private lateinit var processingStatus: TextView
+    private var lastAssociationHints: List<Triple<String, String, String?>>? = null
+    private var associationReady = false
+    private var lastWorkRecords: List<WorkSession>? = null
     private var sessionAttentionDetails: TextView? = null
     private var sessionsView: SessionsView? = null
+    private var sessionsDialog: SessionsDialog? = null
+    private var topBrowser = "camera"
     private var displayedSession: String? = null
     private lateinit var timestampSettings: Button
     private var appearance = TimestampAppearance()
@@ -160,6 +170,8 @@ class MainActivity : ComponentActivity() {
                 nextWorkTick = android.os.SystemClock.elapsedRealtime() + 1000
                 work.reconcile()
                 renderWork()
+                sessionsView?.refreshDates()
+                workView?.refreshDates()
             }
             handler.postDelayed(this, 250)
         }
@@ -191,26 +203,40 @@ class MainActivity : ComponentActivity() {
         }
         model.state.observe(this) { state ->
             renderCapture(state); bindCamera()
-            if (!state.loading && !state.recoveryBlocked) sync.backfillAssociations(model.sessions.value.orEmpty())
+            sessionsView?.loading(!state.loading && !state.recoveryBlocked,
+                if (state.recoveryBlocked) "Session metadata unavailable. Retained data; see diagnostics and recovery on Camera." else "Loading saved sessions…")
+            val ready = !state.loading && !state.recoveryBlocked
+            if (ready && !associationReady) requestAssociationBackfill(model.sessions.value.orEmpty())
+            associationReady = ready
+            renderBacklog()
+            renderProcessing()
         }
         model.sessions.observe(this) { sessions ->
             sessionsView?.render(sessions)
-            if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) sync.backfillAssociations(sessions)
-            backlog.text = String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", sessions.size,
-                sessions.sumOf { it.bytes } / 1048576.0, sessions.count { it.canRetry || it.error.isNotEmpty() })
+            if (model.state.value?.let { !it.loading && !it.recoveryBlocked } == true) requestAssociationBackfill(sessions)
+            renderProcessing()
+            renderBacklog()
             renderWork()
         }
         work.state.observe(this) { renderWork(); sessionsView?.render(model.sessions.value.orEmpty()) }
+        model.outputReviewError.observe(this) { sessionsView?.evidenceUnavailable(it != null); renderAttentionDestinations() }
+        model.processing.observe(this) { renderProcessing() }
         sync.state.observe(this) { sharedView?.render(it) }
         downloadVideo = savedInstanceState?.getString("syncDownloadVideo")?.let { org.json.JSONObject(it) }
         downloadMobileConsent = savedInstanceState?.getBoolean("syncDownloadMobile") ?: false
         downloadPickerPending = savedInstanceState?.getBoolean("syncDownloadPending") ?: false
         updateBlackout()
         pendingWorkId = intent.getStringExtra("workId")
-        if (savedInstanceState?.getBoolean("workOpen") == true) {
+        fun restoreTimeboxes() {
+            if (savedInstanceState?.getBoolean("workOpen") != true) return
             showWork(savedInstanceState.getString("workId"))
             workView?.restore(savedInstanceState.getString("workPage") ?: "list", savedInstanceState.getString("workId"), savedInstanceState.getString("workSetupReturn"), savedInstanceState.getBoolean("workArchivedView"), savedInstanceState.getString("workTypeFilter"), savedInstanceState.getString("workSort"))
+            savedInstanceState.getBundle("timeboxBrowser")?.let { workView?.restoreBrowserState(it) }
         }
+        fun restoreSessions() { savedInstanceState?.getBundle("sessionsBrowser")?.let { showSessions(); sessionsView?.restoreState(it) } }
+        if (savedInstanceState?.getString("browserTop") == "timeboxes") { restoreSessions(); restoreTimeboxes() }
+        else { restoreTimeboxes(); restoreSessions() }
+        if (savedInstanceState == null) routeSessions(intent)
         if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings()
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
     }
@@ -300,7 +326,7 @@ class MainActivity : ComponentActivity() {
         split = spinner(listOf("Off — keep photos, manual export", "2 hours", "3 hours (default)")).apply { contentDescription = "Adaptive automatic session split"; setSelection(saved?.getInt("split") ?: SessionSplit.entries.indexOf(defaults.split)) }
         interval = spinner(intervals.map { "Every ${it}s" }).apply { contentDescription = "Photo capture interval"; setSelection(saved?.getInt("interval") ?: intervals.indexOf(defaults.interval).coerceAtLeast(0)) }
         fps = spinner(frameRates.map { "$it fps" }).apply { contentDescription = "Export frames per second"; setSelection(saved?.getInt("fps") ?: frameRates.indexOf(defaults.fps).coerceAtLeast(0)) }
-        listOf(lens, label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not work minutes", 14f), maxSeconds,
+        listOf(lens, label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not timebox minutes", 14f), maxSeconds,
             label("Adaptive auto-split (active recording time)", 14f), split, interval, fps).forEach { capturePanel.addView(it) }
         capturePanel.addView(label("With 2h/3h, Pause retains the session; Finish exports. Only verified output permits source cleanup. Off/Fixed/legacy remain manual. Foreground only; no cadence/storage guarantee.", 14f))
         blackoutToggle = CheckBox(this).apply {
@@ -354,7 +380,7 @@ class MainActivity : ComponentActivity() {
         val cardTop = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         workTitle = label("No timebox running", 14f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         cardTop.addView(workTitle, LinearLayout.LayoutParams(0, -2, 1f))
-        workButton = Button(this).apply { text = "Work"; setOnClickListener { showWork() } }
+        workButton = Button(this).apply { text = "Timeboxes"; setOnClickListener { showWork() } }
         cardTop.addView(workButton, LinearLayout.LayoutParams(-2, -2))
         card.addView(cardTop)
         val timing = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -385,7 +411,9 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { if (hasCameraPermission()) { invalidateCamera(); bindCamera() } else requestCamera.launch(Manifest.permission.CAMERA) }
         }
         recovery = Button(this).apply { text = "Retry saved session recovery"; visibility = View.GONE; setOnClickListener { model.retryRecovery() } }
+        processingStatus = label("Loading media processing status…", 13f)
         root.addView(permission); root.addView(recovery); root.addView(status); root.addView(attentionNotice); root.addView(summary)
+        root.addView(processingStatus)
         capture = Button(this).apply {
             text = "Start capture"; minHeight = dp(72); minWidth = dp(72); textSize = 12f
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(255, 205, 205)) }
@@ -475,18 +503,24 @@ class MainActivity : ComponentActivity() {
         renderBlackout() // Reveal and restore bars before exposing/announcing the notice.
         renderAttentionDestinations()
         if (sessionNotices > 0 || workNotices > 0) {
-            val destinations = listOfNotNull("Sessions".takeIf { sessionNotices > 0 }, "Work".takeIf { workNotices > 0 }).joinToString(" and ")
+            val destinations = listOfNotNull("Sessions".takeIf { sessionNotices > 0 }, "Timeboxes".takeIf { workNotices > 0 }).joinToString(" and ")
             attentionNotice.visibility = View.VISIBLE
             attentionNotice.text = "New attention in $destinations. Open $destinations for details; recording controls are unchanged."
         }
     }
 
     private fun renderAttentionDestinations() {
-        val sessions = maxOf(model.attention.snapshot.count,
-            model.sessions.value.orEmpty().count { it.canRetry || it.error.isNotEmpty() })
+        val values = model.sessions.value.orEmpty()
+        if (attentionSource !== values) {
+            attentionSource = values
+            actionableSessionCount = values.distinctBy { it.id }.count { it.needsAttention }
+        }
+        val sessions = actionableSessionCount
+        val sessionNotices = model.attention.snapshot.count
         val workCount = maxOf(work.attention.snapshot.count, if (work.state.value?.error != null) 1 else 0)
-        val sessionsLabel = if (sessions > 0) "Sessions · attention ($sessions)" else "Sessions"
-        val workLabel = if (workCount > 0) "Work · attention ($workCount)" else "Work"
+        val sessionsLabel = if (sessions > 0) "Sessions · attention ($sessions)"
+            else if (sessionNotices > 0) "Sessions · notices ($sessionNotices)" else "Sessions"
+        val workLabel = if (workCount > 0) "Timeboxes · attention ($workCount)" else "Timeboxes"
         if (sessionsButton.text.toString() != sessionsLabel) sessionsButton.text = sessionsLabel
         if (workButton.text.toString() != workLabel) workButton.text = workLabel
         sessionAttentionDetails?.let { view ->
@@ -494,7 +528,7 @@ class MainActivity : ComponentActivity() {
             if (view.text.toString() != detail) view.text = detail
             (view.parent as? View)?.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
         }
-        if (sessions == 0 && workCount == 0) attentionNotice.visibility = View.GONE
+        if (sessions == 0 && sessionNotices == 0 && workCount == 0) attentionNotice.visibility = View.GONE
     }
 
     private fun renderBlackout() {
@@ -713,13 +747,17 @@ class MainActivity : ComponentActivity() {
 
     private fun showWork(id: String? = null) {
         if (workDialog != null) return
+        val began = android.os.SystemClock.elapsedRealtime()
         val view = WorkSessionsView(this, work, { model.sessions.value.orEmpty() }, ::openSessionVideo,
             ::configureTimeboxNotifications, ::configureBackgroundTiming, id)
-        workView = view
+        val constructed = android.os.SystemClock.elapsedRealtime()
+        workView = view; topBrowser = "timeboxes"
         modalDepth++; updateBlackout()
+        val admitted = android.os.SystemClock.elapsedRealtime()
         workDialog = WorkDialog(this, view) {
-            workView = null; workDialog = null; modalDepth--; updateBlackout()
+            workView = null; workDialog = null; topBrowser = if (sessionsView != null) "sessions" else "camera"; modalDepth--; updateBlackout()
         }.apply { show() }
+        debugBrowserTiming("Timeboxes", began, constructed, admitted)
     }
     private fun renderWork() {
         if (!::workTitle.isInitialized) return
@@ -731,29 +769,88 @@ class MainActivity : ComponentActivity() {
         workRemaining.visibility = if (workRemaining.text.isEmpty()) View.GONE else View.VISIBLE
         workEnd.visibility = if (running == null) View.GONE else View.VISIBLE; workEnd.isEnabled = state.loaded
         workView?.render(state)
-        if (state.loaded) blackout.observeTerminals(state.snapshot.records.filter { it.state == WorkState.ENDED }
-            .map { "${it.id}:${it.reason}:${it.endElapsed}" }.toSet())
+        if (state.loaded && lastWorkRecords !== state.snapshot.records) {
+            lastWorkRecords = state.snapshot.records
+            blackout.observeTerminals(state.snapshot.records.filter { it.state == WorkState.ENDED }
+                .map { "${it.id}:${it.reason}:${it.endElapsed}" }.toSet())
+        }
         updateBlackout()
         if (state.loaded && pendingWorkId != null) { val id = pendingWorkId; pendingWorkId = null; showWork(id) }
     }
-    private fun showSessions() {
-        if (sessionsView != null) return
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)) }
-        sessionAttentionDetails = label("", 14f).apply { contentDescription = "Sessions attention details" }
-        panel.addView(ScrollView(this).apply { addView(sessionAttentionDetails) }, LinearLayout.LayoutParams(-1, dp(96)))
-        listOf(backlog, export, open, discard).forEach { (it.parent as? android.view.ViewGroup)?.removeView(it); panel.addView(it) }
-        val view = SessionsView(this, open = { openSessionVideo(it.id) }, retry = { model.retrySession(it.id) }, delete = {
-            confirmDelete(it.id, "Delete ${it.retained} retained source photos and cancel queued work? Published video and other sessions are unchanged. Unknown files stop deletion.")
-        }, linkedWork = { id -> showRecordingLinks(id) }, linkSummary = { id ->
-            val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
-            if (work.state.value?.error != null) "Work context unavailable; retained" else "Linked timeboxes: ${links.map { it.workId }.distinct().size}"
-        })
-        panel.addView(view, LinearLayout.LayoutParams(-1, 0, 1f)); sessionsView = view; view.render(model.sessions.value.orEmpty())
-        AlertDialog.Builder(this).setTitle("Sessions").setView(panel).setPositiveButton("Close", null).create().apply {
-            setOnShowListener { window?.setLayout(-1, (resources.displayMetrics.heightPixels * 0.90).toInt()) }
-            showBlackoutModal(this) { sessionsView = null; sessionAttentionDetails = null }
+    private fun renderBacklog() {
+        val state = model.state.value
+        val values = model.sessions.value.orEmpty()
+        val mode = if (state?.recoveryBlocked == true) 1 else if (state?.loading != false) 0 else 2
+        if (backlogSource === values && backlogMode == mode) return
+        backlogSource = values; backlogMode = mode
+        backlog.text = when {
+            state?.recoveryBlocked == true -> "Session metadata unavailable; totals unknown. Data retained."
+            state?.loading != false -> "Loading session metadata; totals not yet available."
+            else -> String.format(Locale.ROOT, "Sessions: %d · retained %.1f MiB · needs attention: %d", values.size,
+                values.sumOf { it.bytes } / 1048576.0, values.distinctBy { it.id }.count { it.needsAttention })
         }
     }
+    private fun requestAssociationBackfill(values: List<SessionReview>) {
+        val hints = values.mapNotNull { review -> review.output?.let { Triple(review.id, it, review.verifiedOperation) } }
+        if (hints != lastAssociationHints) { lastAssociationHints = hints; sync.backfillAssociations(values) }
+    }
+    private fun renderProcessing() {
+        if (!::processingStatus.isInitialized) return
+        val active = model.processing.value.orEmpty()
+        val values = model.sessions.value.orEmpty()
+        val text = if (model.state.value?.loading != false) "Loading media processing status…"
+            else if (model.state.value?.recoveryBlocked == true) "Media status unavailable; saved data retained"
+            else if (active.isNotEmpty()) active.joinToString("\n") {
+                "${it.stage.label} · ${it.sessionId}${it.percent?.let { p -> " · $p%" } ?: " · in progress (indeterminate)"}"
+            } else if (values.any { it.processing.wait == ProcessingWait.RETRY_DELAY }) "Media processing waiting for automatic retry"
+            else if (values.any { it.processing.wait != ProcessingWait.NONE }) "Media processing queued / waiting"
+            else if (values.any { it.needsAttention }) "Media idle · Sessions needs attention"
+            else "Media processing idle · see Sessions for completed work"
+        if (processingStatus.text.toString() != text) processingStatus.text = text
+        if (model.state.value?.exporting == true) export.text = active.firstOrNull()?.let {
+            "${it.stage.label}${it.percent?.let { p -> " $p%" } ?: "…"}"
+        } ?: "Export finishing…"
+    }
+    private fun showSessions() {
+        if (sessionsView != null) return
+        val began = android.os.SystemClock.elapsedRealtime()
+        val view = SessionsView(this, open = { openSessionVideo(it.id) }, retry = { model.retrySession(it.id) }, delete = {
+            confirmDelete(it.id, "Delete ${it.retained} retained source photos and cancel queued work? Published video and other sessions are unchanged. Unknown files stop deletion.")
+        }, linkedWork = ::showRecordingLinks, linkSummary = { id ->
+            val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
+            if (work.state.value?.error != null) "Timebox context unavailable; retained" else "Linked timeboxes: ${links.map { it.workId }.distinct().size}"
+        }, checkOutput = model::recheckVideo)
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        listOf(backlog, export, open, discard).forEach { (it.parent as? ViewGroup)?.removeView(it); actions.addView(it) }
+        view.addView(ScrollView(this).apply { addView(actions) }, LinearLayout.LayoutParams(-1, dp(128)))
+        sessionsView = view; sessionAttentionDetails = view.diagnostics; topBrowser = "sessions"
+        val state = model.state.value
+        view.loading(state?.let { !it.loading && !it.recoveryBlocked } == true,
+            if (state?.recoveryBlocked == true) "Session metadata unavailable. Data retained; see Camera recovery." else "Loading saved sessions…")
+        view.evidenceUnavailable(model.outputReviewError.value != null)
+        view.render(model.sessions.value.orEmpty())
+        val constructed = android.os.SystemClock.elapsedRealtime()
+        modalDepth++; updateBlackout()
+        val admitted = android.os.SystemClock.elapsedRealtime()
+        sessionsDialog = SessionsDialog(this, view) {
+            sessionsView = null; sessionsDialog = null; sessionAttentionDetails = null
+            topBrowser = if (workView != null) "timeboxes" else "camera"; modalDepth--; updateBlackout()
+        }.also { it.show() }
+        debugBrowserTiming("Sessions", began, constructed, admitted)
+    }
+    private fun debugBrowserTiming(surface: String, began: Long, constructed: Long, admitted: Long) {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            android.util.Log.d("TTL018UI", "$surface construct=${constructed - began} modal=${admitted - constructed} window=${android.os.SystemClock.elapsedRealtime() - admitted}")
+        }
+    }
+    private fun routeSessions(value: Intent) {
+        val id = value.getStringExtra("sessionId")
+        if (id != null || value.getBooleanExtra("sessionsAttention", false)) {
+            showSessions()
+            if (id != null) sessionsView?.showSession(id) else sessionsView?.showAttention()
+        }
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); routeSessions(intent) }
     private fun showRecordingLinks(id: String) {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)); setPadding(dp(12), dp(12), dp(12), dp(12)) }
         val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
@@ -771,7 +868,7 @@ class MainActivity : ComponentActivity() {
     private fun openSessionVideo(id: String) { model.openSessionVideo(id) { uri -> if (!isDestroyed) {
         if (uri == null) {
             workView?.markUnavailable(id)
-            Toast.makeText(this, "Output missing or unreadable. Work context and retained sources are unchanged.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Output missing or unreadable. Timebox context and retained sources are unchanged. See Sessions for the observed state.", Toast.LENGTH_LONG).show()
         } else openVideoUri(uri)
     } } }
     private fun openVideoUri(uri: android.net.Uri) {
@@ -819,6 +916,9 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean("sheetOpen", sheet?.isShowing == true)
         outState.putBoolean("workOpen", workView != null); outState.putString("workPage", workView?.savedPage()); outState.putString("workId", workView?.selectedId()); outState.putString("workSetupReturn", workView?.setupReturnId()); outState.putBoolean("workArchivedView", workView?.isShowingArchived() == true)
         outState.putString("workTypeFilter", workView?.activityTypeFilter()); outState.putString("workSort", workView?.listSort())
+        outState.putString("browserTop", topBrowser)
+        outState.putBundle("sessionsBrowser", sessionsView?.saveState())
+        outState.putBundle("timeboxBrowser", workView?.saveBrowserState())
         outState.putString("syncDownloadVideo", downloadVideo?.toString())
         outState.putBoolean("syncDownloadMobile", downloadMobileConsent)
         outState.putBoolean("syncDownloadPending", downloadPickerPending)
@@ -834,7 +934,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         activityDestroyed = true; updateMotionSensors(false); blackout.close(); renderBlackout()
-        sheet?.dismiss(); workDialog?.dismiss(); super.onDestroy()
+        sheet?.dismiss(); workDialog?.dismiss(); sessionsDialog?.dismiss(); super.onDestroy()
     }
     private companion object {
         const val LIGHT_SYSTEM_BARS = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS

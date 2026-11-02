@@ -16,13 +16,18 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class WorkSessionActivityTest {
     private fun buttons(view: android.view.View) = WorkUiFixtures.descendants(view).filterIsInstance<Button>()
+    private fun rows(view: WorkSessionsView): List<Button> {
+        val list = WorkUiFixtures.descendants(view).filterIsInstance<android.widget.ListView>().single()
+        // Small fixtures only: explicitly inspect adapter rows, not just the currently mounted viewport.
+        return (0 until list.adapter.count).mapNotNull { list.adapter.getView(it, null, list) as? Button }
+    }
     private fun field(view: android.view.View, prefix: String) = WorkUiFixtures.descendants(view).filterIsInstance<EditText>()
         .single { it.contentDescription.toString().startsWith(prefix) }
     private fun alertButton(label: String) = android.view.inspector.WindowInspector.getGlobalWindowViews()
         .flatMap(WorkUiFixtures::descendants).filterIsInstance<Button>().single { it.text.toString().equals(label, true) }.performClick()
     private fun choose(index: Int) {
         val list = android.view.inspector.WindowInspector.getGlobalWindowViews().flatMap(WorkUiFixtures::descendants)
-            .filterIsInstance<android.widget.ListView>().single()
+            .filterIsInstance<android.widget.ListView>().single { it.adapter?.getItem(0) is CharSequence }
         list.performItemClick(list.adapter.getView(index, null, list), index, list.adapter.getItemId(index))
     }
 
@@ -45,7 +50,7 @@ class WorkSessionActivityTest {
                     owner.state.observe(activity) { view.render(it) }
                     dialog = WorkDialog(activity, view) {}; dialog.show()
                     buttons(view).single { it.text == "Edit timebox" }.performClick()
-                    assertEquals(3, WorkUiFixtures.descendants(view).filterIsInstance<EditText>().size)
+                    assertEquals(4, WorkUiFixtures.descendants(view).filterIsInstance<EditText>().size)
                     assertEquals(1, WorkUiFixtures.descendants(view).filterIsInstance<android.widget.Spinner>().size)
                     assertEquals("Original", field(view, "Activity title").text.toString())
                     field(view, "Activity title").setText("Changed")
@@ -56,11 +61,15 @@ class WorkSessionActivityTest {
                 scenario.onActivity {
                     alertButton("Keep editing")
                     assertEquals("Changed", field(view, "Activity title").text.toString())
+                }
+                WorkUiFixtures.idle() // Let the prior alert's actual dismiss callback complete before another Back.
+                scenario.onActivity {
                     assertTrue(view.back())
                 }
                 WorkUiFixtures.idle()
+                scenario.onActivity { alertButton("Discard changes") }
+                WorkUiFixtures.idle() // AlertDialog dispatches the positive action through its Handler.
                 scenario.onActivity {
-                    alertButton("Discard changes")
                     assertEquals("detail", view.savedPage()); assertEquals(original.id, view.selectedId())
                     assertEquals(original, owner.state.value!!.snapshot.records.single()); assertEquals(create, owner.editorDraft)
                     buttons(view).single { it.text == "Edit timebox" }.performClick()
@@ -161,7 +170,10 @@ class WorkSessionActivityTest {
         val runningSnapshot = TimeboxPolicy.start(WorkSnapshot(records = records + archived), records.first().id, WorkMoment("fixture", 0, 1000))
         WorkSessionStore(root).commit(runningSnapshot)
         val owner = WorkSessionCoordinator(context.applicationContext as Application, root, false, clock = { WorkMoment("fixture", 10, 1010) })
-        fun ids(view: WorkSessionsView) = buttons(view).map { it.text.toString().substringAfterLast('\n') }.filter { id -> (records + archived).any { it.id == id } }
+        val unstarted = records.drop(1)
+        fun ids(view: WorkSessionsView) = rows(view).map { it.text.toString().substringAfterLast('\n') }
+            .filter { id -> (records + archived).any { it.id == id } }
+        val oldDate = java.time.Instant.ofEpochMilli(1000).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
         try {
             WorkUiFixtures.emptyActivity().use { scenario ->
                 WorkUiFixtures.await(scenario) { owner.state.value?.loaded == true }
@@ -171,24 +183,27 @@ class WorkSessionActivityTest {
                     view = WorkSessionsView(activity, owner, { emptyList() }, {}, {}, {})
                     owner.state.observe(activity) { view.render(it) }
                     dialog = WorkDialog(activity, view) {}; dialog.show()
-                    assertEquals("Sort: Newest created", buttons(view).single { it.text.toString().startsWith("Sort:") }.text.toString())
-                    assertEquals(records.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
-                    buttons(view).single { it.text.toString().startsWith("Sort:") }.performClick(); choose(1)
-                    assertEquals(records.sortedWith(compareBy<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
-                    buttons(view).single { it.text.toString().startsWith("Sort:") }.performClick(); choose(2)
-                    assertEquals(records.sortedWith(compareBy<WorkSession> { WorkType.fromKey(it.type).ordinal }.thenByDescending { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    assertEquals("Within portion/date: Newest", buttons(view).single { it.text.toString().startsWith("Within portion/date:") }.text.toString())
+                    assertEquals(unstarted.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    rows(view).single { it.text.toString().startsWith("$oldDate (") }.performClick()
+                    assertEquals(records.first().id, ids(view).last()) // Only the actual-start group expands.
+                    rows(view).single { it.text.toString().startsWith("$oldDate (") }.performClick()
+                    buttons(view).single { it.text.toString().startsWith("Within portion/date:") }.performClick(); choose(1)
+                    assertEquals(unstarted.sortedWith(compareBy<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    buttons(view).single { it.text.toString().startsWith("Within portion/date:") }.performClick(); choose(2)
+                    assertEquals(unstarted.sortedWith(compareBy<WorkSession> { WorkType.fromKey(it.type).ordinal }.thenByDescending { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
                     WorkType.entries.forEachIndexed { index, type ->
                         buttons(view).single { it.text.toString().startsWith("Activity type:") }.performClick(); choose(index + 1)
-                        assertEquals(records.filter { it.type == type.key }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                        assertEquals(unstarted.filter { it.type == type.key }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
                     }
                     buttons(view).single { it.text.toString().startsWith("Activity type:") }.performClick(); choose(4)
-                    assertEquals(records.filter { it.type == "social" }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
+                    assertEquals(unstarted.filter { it.type == "social" }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
                     assertTrue(buttons(view).single { it.text == "View running timebox" }.visibility == android.view.View.VISIBLE)
                     buttons(view).single { it.text == "View running timebox" }.performClick(); assertEquals(records.first().id, view.selectedId())
                     assertTrue(buttons(view).none { it.text == "Edit timebox" }); assertTrue(view.back())
                     buttons(view).single { it.text.toString().startsWith("Show archived") }.performClick()
                     assertEquals(archived.filter { it.type == "social" }.sortedWith(compareByDescending<WorkSession> { it.createdAt }.thenBy { it.id }).map { it.id }, ids(view))
-                    assertTrue(buttons(view).single { it.text == "View running timebox" }.visibility != android.view.View.VISIBLE)
+                    assertFalse(buttons(view).single { it.text == "View running timebox" }.isShown)
                     view.render(owner.state.value!!.copy(snapshot = WorkSnapshot(records = archived.filter { it.type != "social" })))
                     assertTrue(WorkUiFixtures.descendants(view).filterIsInstance<android.widget.TextView>().any { it.visibility == android.view.View.VISIBLE && it.text == "No timeboxes match this Activity type." })
                     view.render(owner.state.value!!.copy(snapshot = WorkSnapshot()))
@@ -232,7 +247,7 @@ class WorkSessionActivityTest {
                     assertTrue(WorkUiFixtures.descendants(view).filterIsInstance<Button>().none { it.text.toString().startsWith(draft.title) })
                     WorkUiFixtures.descendants(view).filterIsInstance<Button>().single { it.text.toString().startsWith("Show archived timeboxes") }.performClick()
                     assertTrue(view.isShowingArchived())
-                    WorkUiFixtures.descendants(view).filterIsInstance<Button>().single { it.text.toString().startsWith(draft.title) }.performClick()
+                    rows(view).single { it.text.toString().startsWith(draft.title) }.performClick()
                     val buttons = WorkUiFixtures.descendants(view).filterIsInstance<Button>()
                     assertTrue(buttons.single { it.text == "Start timebox" }.visibility != android.view.View.VISIBLE)
                     buttons.single { it.text == "Restore timebox" }.performClick()

@@ -23,4 +23,10 @@ data class SessionReview(
     val canRetry: Boolean,
     val canDelete: Boolean,
     val verifiedOperation: String? = null,
-)
+    val processing: SessionProcessing = SessionProcessing(),
+    val outputObservation: OutputObservation? = null,
+) {
+    val outputIdentity: SessionOutputIdentity? get() = output?.let { SessionOutputIdentity(id, it, verifiedOperation) }
+    val currentObservation: OutputObservation? get() = outputObservation?.takeIf { it.identity == outputIdentity }
+    val needsAttention: Boolean get() = processing.issues.isNotEmpty() || currentObservation?.availability?.actionable == true
+}

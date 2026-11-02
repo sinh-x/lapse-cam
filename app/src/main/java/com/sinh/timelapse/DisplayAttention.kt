@@ -16,17 +16,20 @@ class DisplayAttention {
     }
     private val unresolved = linkedMapOf<String, String>()
     private var pending = 0
-    val snapshot: Snapshot get() = Snapshot(unresolved.toMap(), pending)
+    private var cachedSnapshot: Snapshot? = null
+    val snapshot: Snapshot get() = cachedSnapshot ?: Snapshot(
+        java.util.Collections.unmodifiableMap(LinkedHashMap(unresolved)), pending).also { cachedSnapshot = it }
 
     fun failure(key: String, detail: String, baseline: Boolean = false) {
+        if (unresolved[key] == detail) return
         if (key !in unresolved && !baseline && pending < Int.MAX_VALUE) pending++
-        unresolved[key] = detail
+        unresolved[key] = detail; cachedSnapshot = null
     }
-    fun resolve(key: String) { unresolved.remove(key) }
-    fun resolveAll() { unresolved.clear() }
+    fun resolve(key: String) { if (unresolved.remove(key) != null) cachedSnapshot = null }
+    fun resolveAll() { if (unresolved.isNotEmpty()) { unresolved.clear(); cachedSnapshot = null } }
     fun deliver(available: Boolean): Int {
         if (!available) return 0
-        return pending.also { pending = 0 }
+        return pending.also { if (pending != 0) { pending = 0; cachedSnapshot = null } }
     }
 }
 

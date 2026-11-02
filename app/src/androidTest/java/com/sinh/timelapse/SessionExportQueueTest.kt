@@ -46,6 +46,50 @@ class SessionExportQueueTest {
         VideoExporter.PublishedVerification(uri ?: Uri.parse("content://fixture/$operation"), "0".repeat(64), count, session.fps,
             (session.configuration as SamplingConfiguration.Adaptive).maxSeconds)
 
+    @Test fun reviewGenerationIncludesBoundedSourceCursorProgress() = fixture { _, _, store, repo ->
+        val session = store.create(SamplingConfiguration.Adaptive(5, 15), SessionLens.REAR, TimestampAppearance(), SessionSplit.DEFAULT)
+        repo.register(session)
+        repeat(20) { add(store, session) }
+        repo.close(session, false)
+        var record = repo.get(session.directory.name)
+        val verified = proof(session, record.operation, null, record.selected)
+        record = repo.receipt(record, verified).let { it.copy(cleanupCycle = it.cleanupCycle.reserve()) }
+        repo.put(record)
+        val beforeGeneration = repo.revision
+        val before = repo.remaining(record).first
+        assertFalse(repo.cleanup(record, verified))
+        assertTrue(repo.revision > beforeGeneration)
+        assertTrue(repo.remaining(record).first < before)
+        assertEquals(20, repo.get(record.id).count) // Durable index summary is not rewritten to fake progress.
+    }
+
+    @Test fun typedActivityUsesActualStagesAndRejectsLateProgress() = fixture { context, root, store, repo ->
+        val session = closed(store, repo)
+        val media = Pending()
+        val seen = mutableListOf<ActiveProcessing?>()
+        var late: ((Int) -> Unit)? = null
+        lateinit var queue: SessionExportQueue
+        queue = SessionExportQueue(direct, media, repo, VideoExporter(context, root, root), { Long.MAX_VALUE },
+            { _, _ -> seen.add(queue.active) }, encode = { _, _, operation, progress ->
+                late = progress; progress(100); Uri.parse("content://fixture/$operation")
+            }, verify = { value, operation, uri, count ->
+                assertEquals(ProcessingStage.VERIFYING, queue.active!!.stage)
+                assertNull(queue.active!!.percent)
+                proof(value, operation, uri, count)
+            }, find = { null })
+        queue.setOpen(true, 0)
+        assertEquals(ProcessingStage.EXPORTING, queue.active!!.stage)
+        while (media.tasks.isNotEmpty()) media.runNext()
+        assertEquals(SessionPhase.FINISHED, repo.get(session.directory.name).phase)
+        assertNull(queue.active)
+        assertTrue(seen.any { it?.stage == ProcessingStage.CLEANUP })
+        assertTrue(seen.any { it?.stage == ProcessingStage.EXPORTING && it.percent == 100 })
+        val updates = seen.size
+        late!!(90)
+        assertEquals(updates, seen.size)
+        assertNull(queue.active)
+    }
+
     @Test fun encodingNeverBlocksSuccessorSavesAndOnlyOneExportRuns() = fixture { context, root, store, repo ->
         val old = closed(store, repo)
         val media = Pending()
