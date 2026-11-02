@@ -181,10 +181,14 @@ known, stopped fixture captures and an unchanged synthetic index; it never reset
 an old recording, its diagnostics, or attempt budgets. Allocation is journalled
 before creation; an interrupted allocation blocks another preparation. Debug
 `TTL018UI` logs split construction, modal admission and window attachment without
-logging record content. Optional `profileMethods=true` samples ART methods during
-browser navigation into a unique retained private `.trace` file. These diagnostic
-runs use revision `direct-main-v1-sampling-profile` and must not be pooled with
-unprofiled frozen-budget measurements; profiler overhead changes timing.
+logging record content. ART method sampling was tried in diagnostic candidate
+`34cc306`; the API-37 Pixel run exceeded 180s, with its process still alive and
+trace still empty at inspection. No completed trace or budget result was obtained;
+the cause is unresolved. `profileMethods=true` is now rejected before launch,
+rather than silently retrying this stalled diagnostic or reporting unprofiled
+results as a profile. Retain its fixture/trace and use non-suspending timing
+probes for the construction hotspot. This failure does not establish a normal-app
+or camera latency result.
 Do not retroactively treat earlier three-sample runs as 30-sample percentiles.
 
 Camera metrics are actual committed JPEG counts/dimensions plus **software
