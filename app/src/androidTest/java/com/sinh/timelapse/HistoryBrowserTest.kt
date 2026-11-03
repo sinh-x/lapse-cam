@@ -29,10 +29,10 @@ class HistoryBrowserTest {
         val values = (0 until 10000).map { review("id-$it", 1 + it % 30L, it % 10 == 0) }
         val browser = SessionsView(activity); activity.setContentView(browser); browser.render(values)
         val list = WorkUiFixtures.descendants(browser).filterIsInstance<ListView>().single()
-        assertEquals(31, list.adapter.count) // Today empty state + date headers only.
+        assertEquals(32, list.adapter.count) // Overview + Today empty state + date headers only.
         browser.showAttention()
-        assertEquals(1003, list.adapter.count) // 1000 unique failures in three dates + date headers.
-        browser.back(); assertEquals(31, list.adapter.count)
+        assertEquals(1004, list.adapter.count) // Overview + 1000 unique failures in three dates + date headers.
+        browser.back(); assertEquals(32, list.adapter.count)
         assertTrue(WorkUiFixtures.descendants(browser).filterIsInstance<TextView>().any { it.text.toString().contains("1000") })
     }
     @Test fun detailRenderDoesNotRecheckAndRestoresEntryIdentity() = fixture { activity ->
@@ -55,7 +55,7 @@ class HistoryBrowserTest {
         val after = before.copy(status = "Current status", canRetry = false)
         browser.render(listOf(after))
         val list = WorkUiFixtures.descendants(browser).filterIsInstance<ListView>().single()
-        assertTrue((list.adapter.getView(1, null, list) as TextView).text.contains("Current status"))
+        assertTrue((list.adapter.getView(2, null, list) as TextView).text.contains("Current status"))
         browser.showSession("today")
         assertFalse(WorkUiFixtures.descendants(browser).filterIsInstance<android.widget.Button>().single { it.text == "Retry" }.isEnabled)
         browser.render(listOf(after.copy(processing = SessionProcessing(hydrated = true))))

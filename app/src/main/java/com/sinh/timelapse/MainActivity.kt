@@ -215,6 +215,7 @@ class MainActivity : ComponentActivity() {
         }
         model.state.observe(this) { state ->
             renderCapture(state); bindCamera()
+            sessionsView?.captureReturn?.render(state)
             sessionsView?.loading(!state.loading && !state.recoveryBlocked,
                 if (state.recoveryBlocked) "Session metadata unavailable. Retained data; see diagnostics and recovery on Camera." else "Loading saved sessions…")
             val ready = !state.loading && !state.recoveryBlocked
@@ -896,15 +897,18 @@ class MainActivity : ComponentActivity() {
             val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
             if (work.state.value?.error != null) "Timebox context unavailable; retained" else "Linked timeboxes: ${links.map { it.workId }.distinct().size}"
         }, checkOutput = model::recheckVideo)
-        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; AppTheme.card(this) }
+        actions.addView(label("CURRENT-SESSION ACTIONS", 12f).apply { setTextColor(AppDesignPolicy.AMBER) })
+        AppTheme.button(export, primary = true); AppTheme.button(open); AppTheme.button(discard, destructive = true)
         listOf(backlog, processingStatus, export, open, discard).forEach { (it.parent as? ViewGroup)?.removeView(it); actions.addView(it) }
-        view.addView(ScrollView(this).apply { addView(actions) }, LinearLayout.LayoutParams(-1, dp(128)))
+        view.setCurrentActions(actions)
         sessionsView = view; sessionAttentionDetails = view.diagnostics; topBrowser = "sessions"
         val state = model.state.value
         view.loading(state?.let { !it.loading && !it.recoveryBlocked } == true,
             if (state?.recoveryBlocked == true) "Session metadata unavailable. Data retained; see Camera recovery." else "Loading saved sessions…")
         view.evidenceUnavailable(model.outputReviewError.value != null)
         view.render(model.sessions.value.orEmpty())
+        view.captureReturn.render(state)
         val constructed = android.os.SystemClock.elapsedRealtime()
         modalDepth++; updateBlackout()
         val admitted = android.os.SystemClock.elapsedRealtime()

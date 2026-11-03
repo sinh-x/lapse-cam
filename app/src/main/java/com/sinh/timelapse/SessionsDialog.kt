@@ -17,10 +17,11 @@ internal class SessionsDialog(activity: Activity, private val browser: SessionsV
         browser.onClose = { dismiss() }
         browser.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets
+            val spacing = AppTheme.dp(view, 12)
+            view.setPadding(spacing + bars.left, bars.top, spacing + bars.right, bars.bottom); insets
         }
         window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.rgb(16, 25, 22)))
+            setBackgroundDrawable(ColorDrawable(AppDesignPolicy.BACKGROUND))
             clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         }
         setOnDismissListener { browser.onClose = null; closed() }
