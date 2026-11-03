@@ -216,6 +216,7 @@ class MainActivity : ComponentActivity() {
         model.state.observe(this) { state ->
             renderCapture(state); bindCamera()
             sessionsView?.captureReturn?.render(state)
+            workDialog?.renderCapture(state)
             sessionsView?.loading(!state.loading && !state.recoveryBlocked,
                 if (state.recoveryBlocked) "Session metadata unavailable. Retained data; see diagnostics and recovery on Camera." else "Loading saved sessions…")
             val ready = !state.loading && !state.recoveryBlocked
@@ -832,7 +833,7 @@ class MainActivity : ComponentActivity() {
         val admitted = android.os.SystemClock.elapsedRealtime()
         workDialog = WorkDialog(this, view) {
             workView = null; workDialog = null; topBrowser = if (sessionsView != null) "sessions" else "camera"; modalDepth--; updateBlackout()
-        }.apply { show() }
+        }.apply { onCamera = ::returnToCamera; renderCapture(model.state.value); show() }
         debugBrowserTiming("Timeboxes", began, constructed, admitted)
     }
     private fun renderWork() {
@@ -909,6 +910,7 @@ class MainActivity : ComponentActivity() {
         view.evidenceUnavailable(model.outputReviewError.value != null)
         view.render(model.sessions.value.orEmpty())
         view.captureReturn.render(state)
+        view.captureReturn.setOnClickListener { returnToCamera() }
         val constructed = android.os.SystemClock.elapsedRealtime()
         modalDepth++; updateBlackout()
         val admitted = android.os.SystemClock.elapsedRealtime()
@@ -917,6 +919,10 @@ class MainActivity : ComponentActivity() {
             topBrowser = if (workView != null) "timeboxes" else "camera"; modalDepth--; updateBlackout()
         }.also { it.show() }
         debugBrowserTiming("Sessions", began, constructed, admitted)
+    }
+    private fun returnToCamera() {
+        val close = { sessionsDialog?.dismiss(); Unit }
+        workDialog?.requestCameraReturn(close) ?: close()
     }
     private fun debugBrowserTiming(surface: String, began: Long, constructed: Long, admitted: Long) {
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {

@@ -17,13 +17,17 @@ import android.window.OnBackInvokedDispatcher
 
 /** A dynamic editor must not use AlertDialog's initial read-only/ALT_FOCUSABLE_IM inference. */
 internal class WorkDialog(activity: Activity, private val workView: WorkSessionsView, closed: () -> Unit) : Dialog(activity) {
-    private val heading = TextView(activity).apply { textSize = 20f; setTextColor(Color.WHITE); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private val heading = TextView(activity).apply { AppTheme.text(this, heading = true) }
+    private val captureReturn = CaptureReturnView(activity)
+    var onCamera: (() -> Unit)? = null
+    fun renderCapture(state: CaptureViewModel.State?) { captureReturn.render(state) }
+    fun requestCameraReturn(then: () -> Unit = {}) { workView.closeToCamera { dismiss(); then() } }
     private val backCallback = OnBackInvokedCallback {
         if (window?.decorView?.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true) hideKeyboard() else navigateBack()
     }
     init {
         val root = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22))
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(AppDesignPolicy.BACKGROUND)
             isFocusableInTouchMode = true
         }
         val header = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -34,6 +38,8 @@ internal class WorkDialog(activity: Activity, private val workView: WorkSessions
         header.addView(back, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header)
+        captureReturn.setOnClickListener { onCamera?.invoke() ?: requestCameraReturn() }
+        root.addView(captureReturn)
         root.addView(workView, LinearLayout.LayoutParams(-1, 0, 1f))
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
@@ -45,7 +51,7 @@ internal class WorkDialog(activity: Activity, private val workView: WorkSessions
         // No implicit draft-discard/close from an accidental outside tap.
         setCanceledOnTouchOutside(false)
         window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.rgb(16, 25, 22)))
+            setBackgroundDrawable(ColorDrawable(AppDesignPolicy.BACKGROUND))
             clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
@@ -54,7 +60,7 @@ internal class WorkDialog(activity: Activity, private val workView: WorkSessions
         setOnDismissListener { hideKeyboard(); workView.dispose(); closed() }
     }
     private fun updateHeading() {
-        heading.text = when (workView.savedPage()) { "setup" -> "New timebox"; "edit" -> "Edit timebox"; "detail" -> "Timebox details"; else -> if (workView.isShowingArchived()) "Archived timeboxes" else "Timeboxes" }
+        heading.text = when (workView.savedPage()) { "setup" -> "New timebox"; "edit" -> "Edit timebox"; "detail" -> "Timebox details"; "reminders" -> "End reminders"; else -> if (workView.isShowingArchived()) "Archived timeboxes" else "Timeboxes" }
     }
     private fun navigateBack() {
         hideKeyboard()
