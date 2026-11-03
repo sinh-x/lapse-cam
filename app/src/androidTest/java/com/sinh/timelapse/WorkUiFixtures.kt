@@ -10,6 +10,22 @@ import org.junit.Assert.*
 
 /** Local configuration fixtures are not phone/UAT evidence. Never operate valuable app state. */
 internal object WorkUiFixtures {
+    private var awakeRegistered = false
+    /** Explicit isolated-test view flag only; no lock-screen bypass or global timeout change. */
+    fun keepTestWindowsAwake(context: Context) {
+        if (androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("keepScreenAwake") != "true" || awakeRegistered) return
+        check(context.packageName in setOf("com.sinh.timelapse.ttl018functional", "com.sinh.timelapse.ttl018baseline", "com.sinh.timelapse.ttl019verification"))
+        (context.applicationContext as android.app.Application).registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(activity: android.app.Activity) { activity.window.decorView.keepScreenOn = true }
+            override fun onActivityCreated(activity: android.app.Activity, state: android.os.Bundle?) = Unit
+            override fun onActivityStarted(activity: android.app.Activity) = Unit
+            override fun onActivityPaused(activity: android.app.Activity) = Unit
+            override fun onActivityStopped(activity: android.app.Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, state: android.os.Bundle) = Unit
+            override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+        })
+        awakeRegistered = true
+    }
     fun descendants(view: View): List<View> {
         val children = if (view is ViewGroup)
             (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
@@ -25,6 +41,7 @@ internal object WorkUiFixtures {
     }
     fun emptyActivity(): ActivityScenario<MainActivity> {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        keepTestWindowsAwake(context)
         val syncFile = java.io.File(context.filesDir, "private-sync/state.json")
         if (syncFile.exists()) {
             val sync = org.json.JSONObject(syncFile.readText())

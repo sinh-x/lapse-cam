@@ -109,6 +109,20 @@ actual backgrounding. Synthetic focus-port tests cannot certify real optics.
 Never clear/uninstall the normal app, remove personal media, enroll credentials
 or perform network/device operations merely to make a test pass.
 
+For an explicitly authorized fresh TTL-019 fixture context, the debug-only
+`-Pttl019Verification=true` build uses `com.sinh.timelapse.ttl019verification`
+(and `.test`), labelled **TTL-019 Verification (disposable)**. It is mutually
+exclusive with the TTL-018 isolation properties; normal/release identity is
+unchanged. Never clear an existing context to satisfy an empty-context guard.
+`-e keepScreenAwake true` opts isolated UI fixtures into a test-view wake flag
+across recreation, not a lock-screen bypass or global timeout change.
+`PhysicalFocusTest` additionally requires `-e ttl019PhysicalFocus true`, CAMERA
+permission, an unlocked device and a non-sensitive scene. It captures at least
+three photos per lens into exact new private cache roots, retains them, verifies
+hold generations while browsing, and never exports/deletes/enrolls. Its
+fixture-owned capture also pauses on Activity stop. Synthetic and physical
+adapter tests remain distinct from human defocus/full-app UAT.
+
 Host tests/build/lint are not screenshots, device execution, CI, human UAT or
 native requirements approval. Preserve the historical validator/CI contract
 mismatch: the sync-accounting self-test currently asks for the TTL-011 full hosted

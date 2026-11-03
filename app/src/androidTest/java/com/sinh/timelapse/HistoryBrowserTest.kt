@@ -59,6 +59,7 @@ class HistoryBrowserTest {
         browser.showSession("today")
         assertFalse(WorkUiFixtures.descendants(browser).filterIsInstance<android.widget.Button>().single { it.text == "Retry" }.isEnabled)
         browser.render(listOf(after.copy(processing = SessionProcessing(hydrated = true))))
+        assertTrue(browser.back()) // The overview is a list header, not mounted on the detail page.
         assertTrue(WorkUiFixtures.descendants(browser).filterIsInstance<android.widget.Button>().any { it.text.toString().contains("Needs attention (0)") })
     }
 

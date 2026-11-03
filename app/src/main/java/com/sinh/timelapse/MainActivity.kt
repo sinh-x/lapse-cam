@@ -780,8 +780,10 @@ class MainActivity : ComponentActivity() {
         updateTimestampControls(appearance)
         fun changed() {
             if (updatingStamp || model.state.value?.canSelectLens != true) return
-            appearance = TimestampAppearance(StampFamily.entries[family.selectedItemPosition], weight.selectedItemPosition == 1,
+            val selected = TimestampAppearance(StampFamily.entries[family.selectedItemPosition], weight.selectedItemPosition == 1,
                 listOf(32, 44, 60)[size.selectedItemPosition], StampPosition.entries[position.selectedItemPosition], date.isChecked)
+            if (selected == appearance) return // Spinner population/recreation is not a user edit.
+            appearance = selected
             clock.appearance = appearance; clock.invalidate(); defaults.rememberAppearance(appearance)
         }
         panel.addView(label("Exact output-space geometry; timestamp appearance is frozen at Start.", 14f))
