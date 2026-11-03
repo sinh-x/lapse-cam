@@ -27,6 +27,26 @@ class SharedHistoryViewTest {
             }
         }
     }
+    @Test fun recreationRestoresPagingWithoutStartingTransfersAndDoesNotPersistTokens() {
+        WorkUiFixtures.emptyActivity().use { scenario -> scenario.onActivity { activity ->
+            var downloads = 0
+            val owner = SyncCoordinator.get(activity.application)
+            val history = json("records" to JSONArray(), "videos" to JSONArray())
+            repeat(51) { history.getJSONArray("records").put(json("id" to "record-$it", "device" to "fixture-source",
+                "fields" to json("title" to json("value" to "Plan $it")))) }
+            val state = SyncCoordinator.State(loaded = true, history = history)
+            val view = SharedHistoryView(activity, owner) { _, _ -> downloads++ }
+            view.render(state)
+            WorkUiFixtures.descendants(view).filterIsInstance<Button>().single { it.text == "Next page" }.performClick()
+            val saved = view.saveState()
+            val restored = SharedHistoryView(activity, owner) { _, _ -> downloads++ }
+            restored.render(state); restored.restoreState(saved)
+            assertEquals(1, WorkUiFixtures.descendants(restored).filterIsInstance<Button>().count { it.text.startsWith("Plan ") })
+            assertEquals(50, saved.getInt("offset")); assertEquals(0, downloads)
+            assertFalse(saved.keySet().any { it.contains("token", ignoreCase = true) })
+            view.dispose(); restored.dispose()
+        } }
+    }
     @Test fun statusDistinguishesPendingConflictLowStorageAndLastSyncedState() {
         WorkUiFixtures.emptyActivity().use { scenario ->
             scenario.onActivity { activity ->

@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
     private val work by lazy { WorkSessionCoordinator.get(application) }
     private val sync by lazy { SyncCoordinator.get(application) }
     private var sharedView: SharedHistoryView? = null
+    private var sharedDialog: AppPageDialog? = null
     private var downloadVideo: org.json.JSONObject? = null
     private var downloadMobileConsent = false
     private var downloadPickerPending = false
@@ -217,6 +218,7 @@ class MainActivity : ComponentActivity() {
             renderCapture(state); bindCamera()
             sessionsView?.captureReturn?.render(state)
             workDialog?.renderCapture(state)
+            sharedDialog?.renderCapture(state); sharedView?.renderCapture(state)
             sessionsView?.loading(!state.loading && !state.recoveryBlocked,
                 if (state.recoveryBlocked) "Session metadata unavailable. Retained data; see diagnostics and recovery on Camera." else "Loading saved sessions…")
             val ready = !state.loading && !state.recoveryBlocked
@@ -251,6 +253,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState?.getString("browserTop") == "timeboxes") { restoreSessions(); restoreTimeboxes() }
         else { restoreTimeboxes(); restoreSessions() }
         if (savedInstanceState == null) routeSessions(intent)
+        savedInstanceState?.getBundle("sharedBrowser")?.let { showSharedHistory(it) }
         if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings(savedInstanceState.getBoolean("sheetTimestamp"))
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
     }
@@ -809,17 +812,20 @@ class MainActivity : ComponentActivity() {
         try { startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse("package:$packageName"))) }
         catch (_: ActivityNotFoundException) { Toast.makeText(this, "Background timing settings are unavailable on this device. Reopen the app to reconcile expiry.", Toast.LENGTH_LONG).show() }
     }
-    private fun showSharedHistory() {
+    private fun showSharedHistory(saved: Bundle? = null) {
+        if (sharedView != null) return
         val view = SharedHistoryView(this, sync) { video, mobile ->
             downloadVideo = org.json.JSONObject(video.toString()); downloadMobileConsent = mobile
             downloadPickerPending = true; updateBlackout()
             try { createSyncDownload.launch("Timelapse-${video.getString("id")}.mp4") }
             catch (error: RuntimeException) { downloadPickerPending = false; updateBlackout(); throw error }
         }
-        sharedView = view
-        sync.state.value?.let(view::render)
-        AlertDialog.Builder(this).setTitle("Private shared history").setView(view).setPositiveButton("Close", null)
-            .create().also { showBlackoutModal(it) { sharedView = null } }
+        sharedView = view; view.onCamera = ::returnToCamera
+        sync.state.value?.let(view::render); view.renderCapture(model.state.value)
+        val dialog = AppPageDialog(this, "Private sync", view).apply { onCamera = ::returnToCamera; renderCapture(model.state.value) }
+        sharedDialog = dialog
+        showBlackoutModal(dialog) { view.dispose(); sharedView = null; sharedDialog = null }
+        saved?.let(view::restoreState)
     }
 
     private fun showWork(id: String? = null) {
@@ -921,7 +927,7 @@ class MainActivity : ComponentActivity() {
         debugBrowserTiming("Sessions", began, constructed, admitted)
     }
     private fun returnToCamera() {
-        val close = { sessionsDialog?.dismiss(); Unit }
+        val close = { sharedDialog?.dismiss(); sessionsDialog?.dismiss(); Unit }
         workDialog?.requestCameraReturn(close) ?: close()
     }
     private fun debugBrowserTiming(surface: String, began: Long, constructed: Long, admitted: Long) {
@@ -1019,6 +1025,7 @@ class MainActivity : ComponentActivity() {
         outState.putString("browserTop", topBrowser)
         outState.putBundle("sessionsBrowser", sessionsView?.saveState())
         outState.putBundle("timeboxBrowser", workView?.saveBrowserState())
+        outState.putBundle("sharedBrowser", sharedView?.saveState())
         outState.putString("syncDownloadVideo", downloadVideo?.toString())
         outState.putBoolean("syncDownloadMobile", downloadMobileConsent)
         outState.putBoolean("syncDownloadPending", downloadPickerPending)
@@ -1034,7 +1041,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         activityDestroyed = true; updateMotionSensors(false); blackout.close(); renderBlackout()
-        sheet?.dismiss(); workDialog?.dismiss(); sessionsDialog?.dismiss(); super.onDestroy()
+        sheet?.dismiss(); sharedDialog?.dismiss(); workDialog?.dismiss(); sessionsDialog?.dismiss(); super.onDestroy()
     }
     private companion object {
         const val LIGHT_SYSTEM_BARS = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
