@@ -470,7 +470,13 @@ class CaptureViewModel @JvmOverloads constructor(
 
     private fun capturePhoto() {
         if (!current.capturing || current.savingPhoto || !foreground || boundaryReached()) return
-        if (!cameraReady()) return stop("Selected camera unavailable. Saved photos are kept.", CaptureMessageImpact.CAPTURE_SAFETY)
+        if (!cameraReady()) {
+            if (focus?.held != true) {
+                val message = "Focus hold is unavailable. Photos retained. Retry to acquire focus."
+                stop(message, CaptureMessageImpact.CAPTURE_SAFETY); update(current.copy(focusError = message))
+            } else stop("Selected camera unavailable. Saved photos are kept.", CaptureMessageImpact.CAPTURE_SAFETY)
+            return
+        }
         val camera = imageCapture ?: return
         val session = current.session ?: return
         val request = captureRequest

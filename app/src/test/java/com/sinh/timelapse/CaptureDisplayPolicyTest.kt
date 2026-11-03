@@ -16,6 +16,16 @@ class CaptureDisplayPolicyTest {
         assertEquals("Timebox status unavailable", unavailable.title); assertEquals("", unavailable.remaining)
         assertTrue(unavailable.recording.contains("legacy")); assertTrue(unavailable.recording.contains("tail unknown"))
     }
+    @Test fun routineSecondsLabelsAreBoundedButPauseAndIdentityChangesAreImmediate() {
+        val label = CaptureDisplayPolicy.ActiveLabel()
+        assertEquals("00:00:01", label.project("a", true, false, 1900, 0))
+        assertEquals("00:00:01", label.project("a", true, false, 2100, 1))
+        assertEquals("00:00:01", label.project("a", true, false, 1900, 2))
+        assertEquals("00:00:02", label.project("a", true, false, 2900, 1000))
+        assertEquals("00:00:03", label.project("a", false, false, 3000, 1001))
+        assertEquals("00:00:00", label.project("b", false, false, 0, 1002))
+        assertTrue(label.project("b", false, true, 0, 1003).contains("tail unknown"))
+    }
     @Test fun formattingFloorsRecordingSecondsAndDoesNotWrapHours() {
         assertEquals("00:00:00", CaptureDisplayPolicy.duration(-1))
         assertEquals("00:00:01", CaptureDisplayPolicy.duration(1999))

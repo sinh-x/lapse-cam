@@ -7,6 +7,23 @@ Camera uses the existing fresh-idle rearming policy. External players/background
 still follow the existing lifecycle owner. TTL-016 owns services, notifications,
 background admission and camera policy; this feature does not implement them.
 
+## Shared presentation
+
+Camera-home dark/amber native controls are shared by Sessions, Timeboxes and
+Private sync. Capture indicators derive from the actual capture owner, not queue
+activity or a remote record's RUNNING state. Return to Camera is navigation only;
+unsaved local timebox edits retain their existing confirmation guard. Sessions
+capture and output/recovery details are separate cards, and its processing overview
+and current-session actions scroll with the recycled list. Timeboxes has a child
+End reminders page for notification and background-timing access.
+
+Private-sync nested pages preserve their parent; recreation restores cached list
+filters/page, selected source/record/video IDs and scroll positions without transfer
+or lifecycle actions. Tokens are excluded from browser saved state and cleared on
+closing enrollment. Queued proposals remain owned by sync; unqueued editor text is
+not a durable proposal. See [Camera-home design and focus safety](APP_DESIGN_FOCUS.md)
+for the output boundary, strict focus gate and visual/device verification checklist.
+
 ## Dates and navigation
 
 Sessions use the recording's actual start instant in the current phone timezone.

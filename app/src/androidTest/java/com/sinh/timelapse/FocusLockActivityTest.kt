@@ -2,7 +2,6 @@ package com.sinh.timelapse
 
 import android.app.Application
 import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -35,9 +34,14 @@ class FocusLockActivityTest {
             model = androidx.lifecycle.ViewModelProvider(owner, object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
-                    CaptureViewModel(app, root, File(root, "cache"), { Long.MAX_VALUE }, { _, _, executor, callback ->
+                    CaptureViewModel(app, root, File(root, "cache"), { Long.MAX_VALUE }, { _, file, executor, callback ->
                         requests.incrementAndGet()
-                        complete.set { executor.execute { callback.onError(ImageCaptureException(ImageCapture.ERROR_UNKNOWN, "Synthetic photo end", null)) } }
+                        complete.set { executor.execute {
+                            val bitmap = android.graphics.Bitmap.createBitmap(VIDEO_WIDTH, VIDEO_HEIGHT, android.graphics.Bitmap.Config.ARGB_8888)
+                            try { file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) } }
+                            finally { bitmap.recycle() }
+                            callback.onImageSaved(ImageCapture.OutputFileResults(null))
+                        } }
                     }) as T
             })[CaptureViewModel::class.java]
         }
@@ -70,8 +74,9 @@ class FocusLockActivityTest {
                 assertEquals(1, requests.get())
             }
             complete.get().invoke()
-            waitFor(model) { !it.busy }
+            waitFor(model) { !it.busy && it.frames == 1 }
             onMain {
+                assertEquals(1, model.state.value!!.frames)
                 model.start(1000, 30)
                 assertTrue(model.state.value!!.focusing)
                 focus.lose()

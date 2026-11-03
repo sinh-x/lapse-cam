@@ -30,7 +30,7 @@ class CameraUiActivityTest {
                 for (state in states) {
                     render.invoke(activity, state)
                     assertEquals(state.capturing, live.text.toString().contains("LIVE"))
-                    if (state.capturing) { assertEquals("Pause capture", primary.text.toString()); assertTrue(primary.isEnabled) }
+                    if (state.capturing) { assertEquals("Pause", primary.text.toString()); assertEquals("Pause capture", primary.contentDescription); assertTrue(primary.isEnabled) }
                 }
                 val preview = WorkUiFixtures.field<androidx.camera.view.PreviewView>(activity, "preview")
                 assertFalse(WorkUiFixtures.descendants(preview.parent as View).contains(live))

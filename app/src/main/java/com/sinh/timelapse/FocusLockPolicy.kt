@@ -12,7 +12,7 @@ class FocusLockPolicy(private val now: () -> Long) {
         deadline = now() + TIMEOUT_MILLIS
         return generation
     }
-    fun current(token: Long) = token == generation && state in setOf(State.ACQUIRING, State.HELD)
+    fun current(token: Long) = token == generation && (state == State.ACQUIRING || state == State.HELD)
     fun observe(token: Long, stable: Boolean): State {
         if (!current(token)) return state
         if (state == State.ACQUIRING) {

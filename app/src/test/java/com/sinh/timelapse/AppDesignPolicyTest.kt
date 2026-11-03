@@ -22,6 +22,9 @@ class AppDesignPolicyTest {
         }
         assertTrue(contrast(AppDesignPolicy.AMBER, AppDesignPolicy.AMBER_SURFACE) >= 4.5)
         assertTrue(contrast(AppDesignPolicy.DANGER, AppDesignPolicy.DANGER_SURFACE) >= 4.5)
+        assertTrue(contrast(AppDesignPolicy.TEXT, AppDesignPolicy.CAPTURE) >= 4.5)
+        assertTrue(contrast(AppDesignPolicy.BORDER, AppDesignPolicy.SURFACE) >= 3)
+        assertTrue(contrast(AppDesignPolicy.BORDER, AppDesignPolicy.BACKGROUND) >= 3)
     }
     @Test fun sharedTouchTargetAndCaptureLabelAreExplicit() {
         assertTrue(AppDesignPolicy.TARGET_DP >= 48)

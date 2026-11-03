@@ -35,7 +35,7 @@ internal class CameraFocusController(private val executor: Executor) : CaptureFo
     private var timeout: Runnable? = null
     private var watchdog: Runnable? = null
     private var lastObservation = 0L
-    override val held get() = policy.state == FocusLockPolicy.State.HELD
+    override val held get() = policy.state == FocusLockPolicy.State.HELD && SystemClock.elapsedRealtime() - lastObservation < 1500
 
     // Camera2 invokes callbacks on its own thread; serialize all policy/control work on main.
     val captureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -109,7 +109,7 @@ internal class CameraFocusController(private val executor: Executor) : CaptureFo
                 timeout?.let(main::removeCallbacks); timeout = null
                 watchdog = object : Runnable {
                     override fun run() {
-                        if (!policy.current(token) || !held) return
+                        if (!policy.current(token) || policy.state != FocusLockPolicy.State.HELD) return
                         if (SystemClock.elapsedRealtime() - lastObservation >= 1500) fail(token, "Focus observations stopped")
                         else main.postDelayed(this, 500)
                     }

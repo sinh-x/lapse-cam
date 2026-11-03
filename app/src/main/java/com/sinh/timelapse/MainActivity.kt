@@ -98,6 +98,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var summary: TextView
     private lateinit var statistics: TextView
     private lateinit var live: TextView
+    private lateinit var captureDuration: TextView
+    private val cameraActiveLabel = CaptureDisplayPolicy.ActiveLabel()
+    private val blackoutActiveLabel = CaptureDisplayPolicy.ActiveLabel()
     private lateinit var workTitle: TextView
     private lateinit var workRemaining: TextView
     private lateinit var workEnd: Button
@@ -116,6 +119,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var cadenceChip: Button
     private lateinit var fpsChip: Button
     private var cameraFocus: CameraFocusController? = null
+    private var observedCamera: androidx.camera.core.CameraInfo? = null
+    private var cameraObserver: androidx.lifecycle.Observer<androidx.camera.core.CameraState>? = null
     private lateinit var export: Button
     private lateinit var discard: Button
     private lateinit var open: Button
@@ -270,7 +275,12 @@ class MainActivity : ComponentActivity() {
             active, if (state.unknownTail) " (last-saved; interruption tail unknown)" else "", duration(state.wallMillis), seconds,
             selectedFps, state.selectedFrames, state.frames, state.savedBytes / 1048576.0, state.nominalIntervalMillis / 1000.0,
             state.thinningStage, state.missedSlots, state.lastShutterGapMillis, state.lastSaveMillis, state.lastSwitchMillis)
-        summary.text = String.format(Locale.ROOT, "Capture %s · %d photos · est. MP4 %.1fs", active, state.frames, seconds)
+        summary.text = String.format(Locale.ROOT, "%d photos · est. MP4 %.1fs", state.frames, seconds)
+        summary.visibility = if (session != null || state.frames > 0) View.VISIBLE else View.GONE
+        val clockLabel = cameraActiveLabel.project(session?.directory?.name, state.capturing, state.unknownTail,
+            state.activeMillis ?: if (session == null) 0L else null, android.os.SystemClock.elapsedRealtime())
+        if (captureDuration.text.toString() != clockLabel) captureDuration.text = clockLabel
+        captureDuration.visibility = if (session != null || state.capturing) View.VISIBLE else View.GONE
         // Errors stay on Camera. Routine diagnostics/export progress live in Recording details.
         val message = listOf(state.focusError, state.cameraMessage, state.message).distinct().filter { it.isNotEmpty() }.joinToString("\n")
         val safetyError = state.blackoutSafetyError
@@ -281,12 +291,15 @@ class MainActivity : ComponentActivity() {
         if (status.text.toString() != message) status.text = message
         val ui = CameraUiPolicy.project(CameraUiPolicy.Input(state.capturing, session != null, state.busy, state.switching,
             state.recoveryBlocked, state.boundLens == state.lens, session?.split != null && session.split != SessionSplit.OFF, state.loading, state.working))
-        capture.text = when { state.focusing -> "Holding focus…"; state.focusError.isNotEmpty() -> "Retry focus"; else -> ui.primary }
-        capture.contentDescription = capture.text; capture.isEnabled = ui.enabled
+        capture.text = when { state.focusing -> "Focus…"; state.focusError.isNotEmpty() -> "Retry"; state.capturing -> "Pause"; session != null -> "Resume"; else -> "Start" }
+        capture.contentDescription = when { state.focusing -> "Holding focus before capture"; state.focusError.isNotEmpty() -> "Retry focus"; else -> ui.primary }
+        capture.isEnabled = ui.enabled
+        (capture.background as? GradientDrawable)?.setColor(if (ui.enabled) AppDesignPolicy.CAPTURE else AppDesignPolicy.DANGER_SURFACE)
+        capture.setTextColor(if (ui.enabled) AppDesignPolicy.TEXT else AppDesignPolicy.MUTED)
         lensSwitch.isEnabled = state.canSelectLens
         lensSwitch.text = if (state.canSelectLens) "Switch camera" else "Camera locked"
         lensSwitch.contentDescription = "${state.lens.storedValue} camera. ${lensSwitch.text}"
-                val liveLabel = when {
+        val liveLabel = when {
             ui.live -> "● LIVE"
             state.recoveryBlocked || state.cameraMessage.isNotEmpty() -> "Error"
             state.focusing -> "Holding focus…"
@@ -311,8 +324,8 @@ class MainActivity : ComponentActivity() {
         split.isEnabled = state.canSelectLens && mode.selectedItemPosition == 0
         interval.isEnabled = state.canSelectLens && mode.selectedItemPosition == 1
         fps.isEnabled = state.canSelectLens; lens.isEnabled = state.canSelectLens
-        // Settings entry remains inspectable; mutations inside the sheet remain locked.
-        timestampSettings.isEnabled = true
+        // Preserve the timestamp mutation-entry lock. Gear permits read-only inspection.
+        timestampSettings.isEnabled = state.canSelectLens
         setChildrenEnabled(timestampPanel, state.canSelectLens)
         sheet?.setLocked(!state.canSelectLens)
         lens.setSelection(SessionLens.entries.indexOf(state.lens))
@@ -414,6 +427,8 @@ class MainActivity : ComponentActivity() {
         val hud = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         live = label("Ready", 14f).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
         hud.addView(live, LinearLayout.LayoutParams(0, -2, 1f))
+        captureDuration = label("00:00:00", 14f).apply { typeface = android.graphics.Typeface.MONOSPACE; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_NONE }
+        hud.addView(captureDuration, LinearLayout.LayoutParams(0, -2, 1f))
         hud.addView(Button(this).apply { text = "⚙"; contentDescription = "Camera settings"; AppTheme.button(this); setOnClickListener { showSettings() } })
         root.addView(hud); root.addView(card)
         // HUD is a sibling outside the exact output frame, never a child of the JPEG/MP4 renderer.
@@ -447,8 +462,8 @@ class MainActivity : ComponentActivity() {
         root.addView(chips)
         capture = Button(this).apply {
             text = "Start capture"; minHeight = dp(72); minWidth = dp(72); textSize = 12f
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(220, 40, 61)); setStroke(dp(3), AppDesignPolicy.TEXT) }
-            setTextColor(Color.WHITE); setOnClickListener { captureAction() }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(AppDesignPolicy.CAPTURE); setStroke(dp(3), AppDesignPolicy.TEXT) }
+            setTextColor(AppDesignPolicy.TEXT); setOnClickListener { captureAction() }
         }
         finish = Button(this).apply { text = "Finish & export"; AppTheme.button(this, primary = true); visibility = View.GONE; setOnClickListener { model.finishSession() } }
         val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -466,7 +481,6 @@ class MainActivity : ComponentActivity() {
         destinations.addView(Button(this).apply { text = "Private sync"; AppTheme.button(this); setOnClickListener { showSharedHistory() } }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(destinations)
         root.addView(finish)
-        cameraUi = root
         blackoutBanner = label("LIVE — recording", 16f).apply {
             gravity = Gravity.CENTER; background = AppTheme.shape(this, AppDesignPolicy.DANGER_SURFACE, AppDesignPolicy.DANGER_SURFACE)
             setPadding(dp(12), dp(6), dp(12), dp(6))
@@ -496,7 +510,11 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8))
             addView(blackoutTitle); addView(blackoutRemaining, LinearLayout.LayoutParams(-1, dp(112))); addView(blackoutRemainingLabel)
         }
-        blackoutCover.addView(ScrollView(this).apply { isFillViewport = true; addView(blackoutContent) },
+        blackoutCover.addView(ScrollView(this).apply {
+            isFillViewport = true; addView(blackoutContent)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            isFocusable = false; descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        },
             FrameLayout.LayoutParams(-1, -1).apply { topMargin = dp(72); bottomMargin = dp(120) })
         blackoutCover.addView(blackoutRecording, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(32) })
         // One accessible reveal node; none of the presentation children can reach hidden controls.
@@ -505,9 +523,11 @@ class MainActivity : ComponentActivity() {
         }
         ViewCompat.replaceAccessibilityAction(blackoutCover, AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
             "Return to Camera; timelapse recording continues") { _, _ -> returnFromBlackout(); true }
+        val cameraScroll = ScrollView(this).apply { isFillViewport = true; addView(root) }
+        cameraUi = cameraScroll
         val host = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            addView(ScrollView(this@MainActivity).apply { isFillViewport = true; addView(root) }, FrameLayout.LayoutParams(-1, -1))
+            addView(cameraScroll, FrameLayout.LayoutParams(-1, -1))
             addView(blackoutCover, FrameLayout.LayoutParams(-1, -1))
         }
         setContentView(host); root.requestApplyInsets(); blackoutCover.requestApplyInsets()
@@ -578,7 +598,9 @@ class MainActivity : ComponentActivity() {
             else if (sessionNotices > 0) "Sessions · notices ($sessionNotices)" else "Sessions"
         val workLabel = if (workCount > 0) "Timeboxes · attention ($workCount)" else "Timeboxes"
         if (sessionsButton.text.toString() != sessionsLabel) sessionsButton.text = sessionsLabel
-        if (workButton.text.toString() != workLabel) workButton.text = workLabel
+        val stripAction = if (work.state.value?.snapshot?.running != null) { if (workCount > 0) "› !" else "›" } else workLabel
+        if (workButton.text.toString() != stripAction) workButton.text = stripAction
+        workButton.contentDescription = workLabel
         sessionAttentionDetails?.let { view ->
             val detail = model.attention.snapshot.details.values.distinct().joinToString("\n")
             if (view.text.toString() != detail) view.text = detail
@@ -600,7 +622,10 @@ class MainActivity : ComponentActivity() {
         val hasCountdown = display.remaining.isNotEmpty()
         blackoutRemaining.visibility = if (hasCountdown) View.VISIBLE else View.GONE
         blackoutRemainingLabel.visibility = blackoutRemaining.visibility
-        val recording = "Active recording\n${display.recording}"
+        val active = blackoutActiveLabel.project(captureState?.session?.directory?.name, captureState?.capturing == true,
+            captureState?.unknownTail == true, captureState?.activeMillis ?: if (captureState?.session == null) 0L else null,
+            android.os.SystemClock.elapsedRealtime())
+        val recording = "Active recording\n$active"
         if (blackoutRecording.text.toString() != recording) blackoutRecording.text = recording
         blackoutCover.contentDescription = "Recording timelapse. ${display.title}. ${display.remaining}. $recording. Return to Camera; recording continues."
     }
@@ -737,6 +762,7 @@ class MainActivity : ComponentActivity() {
     private fun refreshSettingChips() {
         val locked = model.state.value?.canSelectLens != true
         modeChip.text = (if (mode.selectedItemPosition == 0) "ADAPTIVE" else "FIXED") + if (locked) " · Locked" else " ›"
+        timestampSettings.text = if (locked) "Timestamp · Locked" else "Timestamp"
         cadenceChip.text = if (mode.selectedItemPosition == 0) "${maxSeconds.text}s video cap" else "${intervals[interval.selectedItemPosition]}s interval"
         fpsChip.text = "${frameRates[fps.selectedItemPosition]} fps"
     }
@@ -789,7 +815,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun showRecordingDetails() {
         (statistics.parent as? android.view.ViewGroup)?.removeView(statistics)
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(8)); setBackgroundColor(Color.rgb(16, 25, 22)); addView(statistics) }
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(8)); setBackgroundColor(AppDesignPolicy.BACKGROUND); addView(statistics) }
         panel.addView(label(model.state.value?.message ?: "Ready", 14f))
         showBlackoutModal(AlertDialog.Builder(this).setTitle("Recording details").setView(ScrollView(this).apply { addView(panel) }).setPositiveButton("Close", null).create())
     }
@@ -848,7 +874,7 @@ class MainActivity : ComponentActivity() {
         val running = state.snapshot.running
         val title = running?.title ?: "No timebox running"
         if (workTitle.text.toString() != title) workTitle.text = title
-        workRemaining.text = state.error ?: if (running == null) "" else runCatching { "Remaining ${WorkSessionsView.remaining(running.remaining(work.now()))}" }.getOrDefault("")
+        workRemaining.text = state.error ?: if (running == null) "" else runCatching { WorkSessionsView.remaining(running.remaining(work.now())) }.getOrDefault("")
         workRemaining.visibility = if (workRemaining.text.isEmpty()) View.GONE else View.VISIBLE
         workEnd.visibility = if (running == null) View.GONE else View.VISIBLE; workEnd.isEnabled = state.loaded
         workView?.render(state)
@@ -944,7 +970,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); routeSessions(intent) }
     private fun showRecordingLinks(id: String) {
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)); setPadding(dp(12), dp(12), dp(12), dp(12)) }
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(AppDesignPolicy.BACKGROUND); setPadding(dp(12), dp(12), dp(12), dp(12)) }
         val links = runCatching { work.state.value?.snapshot?.links(work.now())?.filter { it.recordingId == id }.orEmpty() }.getOrDefault(emptyList())
         panel.addView(label("Capture-time context, not MP4 seek positions. ${if (links.isEmpty()) "No known overlaps." else ""}", 14f))
         links.forEach { link ->
@@ -968,7 +994,11 @@ class MainActivity : ComponentActivity() {
         catch (_: ActivityNotFoundException) { Toast.makeText(this, "No video player installed. Find the MP4 in Movies/TimestampTimelapse.", Toast.LENGTH_LONG).show() }
         catch (_: SecurityException) { Toast.makeText(this, "Video unavailable. See Sessions; removed photos cannot be restored.", Toast.LENGTH_LONG).show() }
     }
-    private fun invalidateCamera() { bindingGeneration++; requestedLens = null; model.attachCamera(null); cameraFocus?.release(); cameraFocus = null }
+    private fun clearCameraObserver() {
+        cameraObserver?.let { observedCamera?.cameraState?.removeObserver(it) }
+        cameraObserver = null; observedCamera = null
+    }
+    private fun invalidateCamera() { bindingGeneration++; requestedLens = null; clearCameraObserver(); model.attachCamera(null); cameraFocus?.release(); cameraFocus = null }
     private fun bindCamera() {
         val state = model.state.value ?: return
         if (!activityForeground || !hasCameraPermission() || state.loading || state.recoveryBlocked) return
@@ -976,6 +1006,7 @@ class MainActivity : ComponentActivity() {
         if (requestedLens == selected) return
         requestedLens = selected
         val generation = ++bindingGeneration
+        clearCameraObserver()
         model.attachCamera(null)
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -1002,13 +1033,16 @@ class MainActivity : ComponentActivity() {
                     .addUseCase(previewUseCase).addUseCase(imageCapture).build()
                 val camera = provider.bindToLifecycle(this, selector, group)
                 focus.attach(camera)
-                camera.cameraInfo.cameraState.observe(this) { cameraState ->
+                observedCamera = camera.cameraInfo
+                val observer = androidx.lifecycle.Observer<androidx.camera.core.CameraState> { cameraState ->
                     if (cameraFocus === focus && cameraState.error != null) {
                         model.attachCamera(null, message = "Camera disconnected. Photos retained. Retry camera.")
                         permission.text = "Retry camera"; permission.visibility = View.VISIBLE
                     }
                 }
+                cameraObserver = observer
                 model.attachCamera(imageCapture, selected, focus = focus); permission.visibility = View.GONE
+                camera.cameraInfo.cameraState.observe(this, observer)
             } catch (error: Exception) {
                 model.attachCamera(null, message = "Camera error: ${error.message}. Saved-photo export remains available.")
                 permission.text = "Retry camera"; permission.visibility = View.VISIBLE
