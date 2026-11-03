@@ -359,7 +359,7 @@ class MainActivity : ComponentActivity() {
             confirmDelete(id, "Remove only this session's inventoried photos and cancel its queued work. Exported videos are unchanged. Unknown files stop deletion.")
         } }
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22)); setPadding(dp(8), 0, dp(8), 0)
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(AppDesignPolicy.BACKGROUND); setPadding(dp(8), 0, dp(8), 0)
         }
         root.accessibilityDelegate = object : View.AccessibilityDelegate() {
             override fun onRequestSendAccessibilityEvent(host: ViewGroup, child: View, event: AccessibilityEvent): Boolean {
@@ -426,8 +426,10 @@ class MainActivity : ComponentActivity() {
         controls.addView(capture, LinearLayout.LayoutParams(dp(96), dp(96)))
         controls.addView(finish, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(controls)
-        root.addView(Button(this).apply { text = "Recording details"; setOnClickListener { showRecordingDetails() } })
-        root.addView(Button(this).apply { text = "Private sync / shared history"; setOnClickListener { showSharedHistory() } })
+        val destinations = LinearLayout(this)
+        destinations.addView(Button(this).apply { text = "Details"; AppTheme.button(this); setOnClickListener { showRecordingDetails() } }, LinearLayout.LayoutParams(0, -2, 1f))
+        destinations.addView(Button(this).apply { text = "Private sync"; AppTheme.button(this); setOnClickListener { showSharedHistory() } }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(destinations)
         cameraUi = root
         blackoutBanner = label("LIVE — recording", 16f).apply {
             gravity = Gravity.CENTER; setBackgroundColor(Color.rgb(170, 0, 0))
@@ -942,7 +944,7 @@ class MainActivity : ComponentActivity() {
     private fun duration(millis: Long): String { val s = millis.coerceAtLeast(0) / 1000; return String.format(Locale.ROOT, "%02d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) }
     private fun hasCameraPermission() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-    private fun label(value: String, size: Float) = TextView(this).apply { text = value; textSize = size; setTextColor(Color.WHITE) }
+    private fun label(value: String, size: Float) = TextView(this).apply { text = value; textSize = size; AppTheme.text(this) }
     private fun spinner(values: List<String>) = Spinner(this).apply {
         minimumHeight = dp(48)
         adapter = object : ArrayAdapter<String>(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, values) {
