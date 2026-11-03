@@ -98,6 +98,7 @@ class SessionRolloverTest {
         val requests = java.util.concurrent.atomic.AtomicInteger()
         val completion = java.util.concurrent.atomic.AtomicReference<() -> Unit>()
         val duplicate = java.util.concurrent.atomic.AtomicReference<() -> Unit>()
+        val focus = FocusFixtures()
         val owner = androidx.lifecycle.ViewModelStore()
         lateinit var model: CaptureViewModel
         fun onMain(action: () -> Unit) = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync(action)
@@ -135,7 +136,7 @@ class SessionRolloverTest {
             await { !it.loading }
             onMain {
                 model.setForeground(true)
-                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.REAR)
+                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.REAR, focus = focus)
                 model.start(SamplingConfiguration.Adaptive(5, 15), split = SessionSplit.TWO_HOURS)
             }
             val first = await { it.savingPhoto && completion.get() != null }
@@ -148,6 +149,8 @@ class SessionRolloverTest {
             completion.getAndSet(null).invoke()
             val next = await { it.capturing && it.session?.directory != old.directory && completion.get() != null }
             assertEquals(2, requests.get())
+            assertEquals(1, focus.acquisitions) // Rollover is not a new focus acquisition.
+            assertTrue(focus.held)
             assertEquals(0, next.frames)
             assertEquals(0L, next.activeMillis)
             assertEquals(old.zoneId, next.session?.zoneId)
@@ -171,7 +174,7 @@ class SessionRolloverTest {
             val view = SessionsView(context, { invoked.add("open:${it.id}") }, { invoked.add("retry:${it.id}") }, { invoked.add("delete:${it.id}") })
             val review = SessionReview("100-${UUID.randomUUID()}", 100, "Adaptive · 3h", 30, 30, 5_000, true,
                 2, 3, 3, 1024, 1, "Needs attention", 0, 3, 0, "Retained failure", null, true, true)
-            view.render(listOf(review))
+            view.render(listOf(review)); view.showSession(review.id)
             fun descendants(view: android.view.View): List<android.view.View> = listOf(view) +
                 if (view is android.view.ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
             val buttons = descendants(view).filterIsInstance<android.widget.Button>()

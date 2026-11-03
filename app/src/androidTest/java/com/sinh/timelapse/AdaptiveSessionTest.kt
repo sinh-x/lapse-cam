@@ -271,7 +271,7 @@ class AdaptiveSessionTest {
             onMain {
                 model.setForeground(true)
                 model.selectLens(SessionLens.FRONT)
-                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.FRONT)
+                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.FRONT, focus = FocusFixtures())
                 model.start(SamplingConfiguration.Adaptive(5, 24), style)
             }
             await { it.savingPhoto && completion.get() != null }

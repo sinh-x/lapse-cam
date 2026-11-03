@@ -11,6 +11,7 @@ import android.view.SurfaceView
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
+import android.widget.ScrollView
 import android.widget.TextView
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -23,16 +24,16 @@ internal object SyncPlayback {
         val closed = AtomicBoolean(false)
         var player: MediaPlayer? = null
         val surface = SurfaceView(activity)
-        val status = TextView(activity).apply { text = "Loading authenticated archived MP4…" }
-        val seek = SeekBar(activity).apply { max = 1000 }
-        val toggle = Button(activity).apply { text = "Pause / Play" }
+        val status = TextView(activity).apply { text = "Loading authenticated archived MP4…"; AppTheme.text(this) }
+        val seek = SeekBar(activity).apply { max = 1000; minimumHeight = AppTheme.dp(this, 48); contentDescription = "Archived video position" }
+        val toggle = Button(activity).apply { text = "Pause / Play"; AppTheme.button(this, primary = true) }
         val panel = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(AppDesignPolicy.BACKGROUND)
             addView(surface, LinearLayout.LayoutParams(-1, (activity.resources.displayMetrics.density * 240).toInt()))
             addView(status); addView(seek); addView(toggle)
         }
         val dialog = AlertDialog.Builder(activity).setTitle("Archived video — capture links are not seek offsets")
-            .setView(panel).setPositiveButton("Close", null).create()
+            .setView(ScrollView(activity).apply { addView(panel) }).setPositiveButton("Close", null).create()
         val source = object : MediaDataSource() {
             override fun getSize() = size
             @Synchronized override fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int): Int {

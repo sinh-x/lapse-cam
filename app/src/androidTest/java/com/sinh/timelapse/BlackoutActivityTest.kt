@@ -76,8 +76,8 @@ class BlackoutActivityTest {
             assertEquals(Color.BLACK, (f.cover.background as ColorDrawable).color)
             val banner = WorkUiFixtures.field<TextView>(activity, "blackoutBanner")
             assertEquals("LIVE — recording", banner.text.toString())
-            assertEquals(Color.rgb(170, 0, 0), (banner.background as ColorDrawable).color)
-            assertEquals(Color.WHITE, banner.currentTextColor)
+            assertTrue(banner.background is android.graphics.drawable.GradientDrawable)
+            assertEquals(AppDesignPolicy.TEXT, banner.currentTextColor)
             assertEquals(android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 16f,
                 activity.resources.displayMetrics), banner.textSize, 0.1f)
             val density = activity.resources.displayMetrics.density
@@ -92,7 +92,8 @@ class BlackoutActivityTest {
                 assertTrue(banner.left >= f.cover.paddingLeft && banner.right <= width - f.cover.paddingRight)
                 assertTrue(banner.top >= f.cover.paddingTop && banner.bottom <= height - f.cover.paddingBottom)
                 assertTrue(banner.height >= banner.layout.height + banner.paddingTop + banner.paddingBottom)
-                assertEquals(1, f.cover.childCount)
+                assertEquals(3, f.cover.childCount)
+                assertTrue(WorkUiFixtures.field<TextView>(activity, "blackoutRecording").text.contains("Active recording"))
             }
             assertSame(previewParent, preview.parent); assertEquals(View.VISIBLE, preview.visibility)
             assertSame(owner, ViewModelProvider(activity)[CaptureViewModel::class.java])

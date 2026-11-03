@@ -49,14 +49,18 @@ internal class WorkSessionsView(
     private var newButton: Button? = null
     private var currentActions: LinearLayout? = null
     private var reminderToggle: Button? = null
-    private var reminderPanel: LinearLayout? = null
-    private var reminderStatus: TextView? = null
+        private var reminderStatus: TextView? = null
     private var notificationButton: Button? = null
     private var timingButton: Button? = null
-    private var reminderExpanded = false
-    private var saving = false
+        private var saving = false
     private var current = text("")
     private var detail = text("")
+    private var detailState: TextView? = null
+    private var detailCountdown: TextView? = null
+    private var detailPlan: TextView? = null
+    private var detailOutcome: TextView? = null
+    private var detailDescription: TextView? = null
+    private var detailTiming: TextView? = null
     private var virtualList: ListView? = null
     private var formScroll: ScrollView? = null
     private val expandedDates = linkedSetOf<String>()
@@ -78,7 +82,11 @@ internal class WorkSessionsView(
             val row = (convertView as? Button) ?: button("") {}
             val value = dateRows[position]
             if (row.text.toString() != value.label) row.text = value.label
-            row.contentDescription = value.label; row.setOnClickListener { value.action() }; return row
+            row.contentDescription = value.label; row.setOnClickListener { value.action() }
+            AppTheme.button(row)
+            if (value.key.startsWith("section:")) { row.background = null; row.setTextColor(AppDesignPolicy.AMBER); row.isEnabled = false }
+            else row.isEnabled = true
+            return row
         }
     }
     private var draft: WorkDraft? = null
@@ -98,7 +106,7 @@ internal class WorkSessionsView(
     private var actions: LinearLayout? = null
     private var linksPanel: LinearLayout? = null
     init {
-        orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(Color.rgb(16, 25, 22))
+        orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(AppDesignPolicy.BACKGROUND)
         buildPage()
     }
     fun back(): Boolean {
@@ -120,16 +128,20 @@ internal class WorkSessionsView(
     fun listSort(): String = sort.name
     fun restore(page: String, id: String?, returnId: String? = null, archivedView: Boolean = false,
         typeFilter: String? = null, sortName: String? = null) {
-        this.page = page.takeIf { it in setOf("list", "setup", "edit", "detail") } ?: "list"
+        this.page = page.takeIf { it in setOf("list", "setup", "edit", "detail", "reminders") } ?: "list"
         if (this.page == "edit" && owner.savedEditor == null) this.page = if (id == null) "list" else "detail"
         activityFilter = typeFilter?.takeIf { key -> WorkType.entries.any { it.key == key } }
         sort = WorkSort.entries.singleOrNull { it.name == sortName } ?: WorkSort.NEWEST
         selected = id; setupReturn = returnId; showArchived = archivedView; buildPage()
     }
-    private fun cancelEdit() {
+    fun closeToCamera(close: () -> Unit) {
+        if (saving || owner.editSaving) return
+        if (page == "edit") cancelEdit(close) else close()
+    }
+    private fun cancelEdit(afterDiscard: () -> Unit = {}) {
         if (owner.editSaving || discardPrompt != null) return
         fun discard() {
-            owner.cancelSavedEdit(); hideKeyboard(); draft = null; page = "detail"; buildPage()
+            owner.cancelSavedEdit(); hideKeyboard(); draft = null; page = "detail"; buildPage(); afterDiscard()
         }
         if (owner.savedEditor?.changed != true) { discard(); return }
         discardPrompt = AlertDialog.Builder(activity).setTitle("Discard unsaved changes?")
@@ -194,17 +206,27 @@ internal class WorkSessionsView(
         formGeneration++
         content.removeAllViews(); content.addView(message); actionsKey = ""; linksKey = null; rowSource = null
         newButton = null; currentActions = null; archiveFilter = null; emptyList = null; typeFilterButton = null; sortButton = null
-        reminderToggle = null; reminderPanel = null; reminderStatus = null; notificationButton = null; timingButton = null
+        reminderToggle = null; reminderStatus = null; notificationButton = null; timingButton = null
         titleField = null; outcomeField = null; descriptionField = null; durationField = null; durationShortcuts = null; saveButton = null
         when (page) {
             "setup", "edit" -> if (owner.state.value?.loaded == true) setup() else content.addView(text("Loading saved draft…"))
+            "reminders" -> buildReminders(content)
             "detail" -> {
-                detail = text(""); content.addView(detail)
+                detail = text("").apply { AppTheme.text(this, heading = true) }; content.addView(detail)
+                detailState = text("").apply { setTextColor(AppDesignPolicy.AMBER) }; content.addView(detailState)
+                detailCountdown = text("").apply {
+                    gravity = android.view.Gravity.CENTER; typeface = android.graphics.Typeface.MONOSPACE; maxLines = 1; minHeight = dp(112)
+                    setAutoSizeTextTypeUniformWithConfiguration(24, 48, 2, android.util.TypedValue.COMPLEX_UNIT_SP)
+                }; content.addView(detailCountdown)
+                detailPlan = text("").apply { AppTheme.card(this) }; content.addView(detailPlan)
+                detailOutcome = text("").apply { AppTheme.card(this) }; content.addView(section("EXPECTED OUTCOME")); content.addView(detailOutcome)
+                detailDescription = text("").apply { AppTheme.card(this) }; content.addView(section("DESCRIPTION")); content.addView(detailDescription)
+                detailTiming = text("").apply { AppTheme.text(this, muted = true) }; content.addView(detailTiming)
                 actions = LinearLayout(activity).apply { orientation = VERTICAL }; content.addView(actions)
                 linksPanel = LinearLayout(activity).apply { orientation = VERTICAL }; content.addView(linksPanel)
             }
             else -> {
-                current = text(""); content.addView(current)
+                current = text("").apply { AppTheme.card(this) }; content.addView(current)
                 currentActions = LinearLayout(activity).apply {
                     orientation = VERTICAL
                     addView(button("View running timebox") { owner.state.value?.snapshot?.running?.id?.let { selected = it; page = "detail"; buildPage() } })
@@ -213,20 +235,9 @@ internal class WorkSessionsView(
                 content.addView(currentActions)
                 newButton = button("New timebox") { newDraft() }; content.addView(newButton)
                 reminderToggle = button("End reminder settings") {
-                    reminderExpanded = !reminderExpanded
-                    reminderPanel?.visibility = if (reminderExpanded) VISIBLE else GONE
+                    page = "reminders"; buildPage()
                 }
                 content.addView(reminderToggle)
-                reminderPanel = LinearLayout(activity).apply {
-                    orientation = VERTICAL; visibility = if (reminderExpanded) VISIBLE else GONE
-                    reminderStatus = text(""); addView(reminderStatus)
-                    addView(text("1. Notifications let the app show an alert when a timebox ends."))
-                    notificationButton = button("Allow end notification") { requestNotifications() }; addView(notificationButton)
-                    addView(text("2. Background timing lets Android wake the app at the deadline while it is closed or the screen is off. This is separate from permission to show the alert."))
-                    timingButton = button("Allow background timing") { requestAlarms() }; addView(timingButton)
-                    addView(text("Both are optional and affect reminders only, not camera recording. Force-stop or OS restrictions can suppress delivery; reopen to reconcile expiry."))
-                }
-                content.addView(reminderPanel)
                 archiveFilter = button("Show archived timeboxes") { showArchived = !showArchived; buildPage() }
                 content.addView(archiveFilter)
                 typeFilterButton = button("") { chooseTypeFilter() }; content.addView(typeFilterButton)
@@ -238,6 +249,24 @@ internal class WorkSessionsView(
         onPageChanged?.invoke()
         owner.state.value?.let(::render)
         virtualList?.setSelectionFromTop(listPosition.first, listPosition.second)
+    }
+    private fun buildReminders(panel: LinearLayout) {
+        panel.addView(text("Two separate permissions").apply { AppTheme.text(this, heading = true) })
+        reminderStatus = text("").apply { AppTheme.card(this) }; panel.addView(reminderStatus)
+        panel.addView(section("1 / NOTIFICATIONS"))
+        panel.addView(text("Show an alert when a timebox ends. Permission is optional; the timebox still works."))
+        notificationButton = button("Allow end notification") { requestNotifications() }; panel.addView(notificationButton)
+        panel.addView(section("2 / BACKGROUND TIMING"))
+        panel.addView(text("Let Android wake the app at the deadline. This does not enable background camera capture."))
+        timingButton = button("Allow background timing") { requestAlarms() }; panel.addView(timingButton)
+        panel.addView(section("DELIVERY LIMITS"))
+        panel.addView(text("Reminders are best effort. Force-stop or OS restrictions can suppress delivery. Reopen the app to reconcile expiry. No camera action occurs when a timebox ends.").apply { AppTheme.card(this) })
+    }
+    private fun renderReminders(state: WorkSessionCoordinator.State) {
+        val access = state.reminderAccess
+        reminderStatus?.text = if (access == null) state.reminder else "Notifications: ${access.notificationStatus}\nBackground timing: ${if (access.backgroundTiming) "Allowed" else "Not allowed"}"
+        notificationButton?.apply { text = access?.notificationAction ?: "Allow end notification"; isEnabled = access?.notificationsAllowed != true }
+        timingButton?.apply { text = access?.timingAction ?: "Allow background timing"; isEnabled = access?.backgroundTiming != true }
     }
     private fun newDraft(copy: WorkSession? = null) {
         if (copy != null && (owner.editorDraft != null || owner.state.value?.snapshot?.draft != null)) {
@@ -358,6 +387,7 @@ internal class WorkSessionsView(
         announcedError = state.error
         if (!state.loaded) { newButton?.isEnabled = false; return }
         if (inForm) setFormEnabled(state.loaded && !saving)
+        renderReminders(state)
         val now = runCatching(owner::now).getOrNull() ?: return
         when (page) {
             "list" -> {
@@ -365,8 +395,7 @@ internal class WorkSessionsView(
                 currentActions?.visibility = if (showArchived || state.snapshot.running == null) GONE else VISIBLE
                 newButton?.visibility = if (showArchived) GONE else VISIBLE
                 reminderToggle?.visibility = if (showArchived) GONE else VISIBLE
-                reminderPanel?.visibility = if (!showArchived && reminderExpanded) VISIBLE else GONE
-                archiveFilter?.text = if (showArchived) "Back to active timeboxes" else "Show archived timeboxes (${state.snapshot.records.count { it.archived }})"
+                                archiveFilter?.text = if (showArchived) "Back to active timeboxes" else "Show archived timeboxes (${state.snapshot.records.count { it.archived }})"
                 typeFilterButton?.text = "Activity type: ${activityFilter?.let { WorkType.fromKey(it).label } ?: "All"}"
                 sortButton?.text = "Within portion/date: ${when (sort) { WorkSort.NEWEST -> "Newest"; WorkSort.OLDEST -> "Oldest"; WorkSort.TYPE -> "Activity type" }}"
                 val partition = state.snapshot.records.filter { it.archived == showArchived }
@@ -399,7 +428,10 @@ internal class WorkSessionsView(
                         selected = work.id; page = "detail"; buildPage()
                     })
                 } }
-                append(projection.unstarted); append(projection.today)
+                if (projection.unstarted.isNotEmpty()) projected.add(DateRow("section:unstarted", "UNSTARTED") {})
+                append(projection.unstarted)
+                if (projection.today.isNotEmpty()) projected.add(DateRow("section:today", "STARTED TODAY") {})
+                append(projection.today)
                 projection.dates.forEach { day ->
                     val key = day.date.toString(); val expanded = key in expandedDates
                     projected.add(DateRow("date:$key", "$key (${day.items.size} timeboxes) · ${if (expanded) "expanded" else "collapsed"}") {
@@ -416,11 +448,17 @@ internal class WorkSessionsView(
             "detail" -> {
                 val work = state.snapshot.records.singleOrNull { it.id == selected } ?: run {
                     detail.text = "This timebox is unavailable or has been deleted."
+                    listOf(detailState, detailCountdown, detailPlan, detailOutcome, detailDescription, detailTiming).forEach { it?.text = "" }
                     actions?.removeAllViews(); linksPanel?.removeAllViews(); return
                 }
                 val start = work.start
-                detail.text = "${work.title}\n${work.id}\nCreated ${dateTime(work.createdAt)}\n${WorkType.fromKey(work.type).label}\nOriginal plan: ${work.plannedDurationLabel}\nExpected outcome: ${work.outcome ?: "Not specified"}\nDescription: ${work.description.ifEmpty { "Not specified" }}\n${work.state.name.lowercase()}${if (work.archived) " · archived" else ""}" +
-                    (if (work.state == WorkState.RUNNING) "\nRemaining ${remaining(work.remaining(now))}" else "") +
+                detail.text = work.title
+                detailState?.text = "${work.state.name} · ${WorkType.fromKey(work.type).label}${if (work.archived) " · archived" else ""}"
+                detailCountdown?.apply { text = if (work.state == WorkState.RUNNING) remaining(work.remaining(now)) else ""; visibility = if (text.isEmpty()) GONE else VISIBLE }
+                detailPlan?.text = "Original plan: ${work.plannedDurationLabel}\n${if (work.state == WorkState.RUNNING) "Timebox remaining above · independent of capture" else if (work.state == WorkState.PLANNED) "Saved intention; countdown has not started" else "Timebox ended"}"
+                detailOutcome?.text = work.outcome ?: "Not specified"
+                detailDescription?.text = work.description.ifEmpty { "Not specified" }
+                detailTiming?.text = "${work.id}\nCreated ${dateTime(work.createdAt)}" +
                     (start?.let { "\nStart ${Instant.ofEpochMilli(it.epoch)} · boot ${it.boot}" } ?: "") +
                     (work.endElapsed?.let { "\n${work.reason} · confirmed elapsed ${work.confirmedElapsed}ms\nDerived end (start wall anchor): ${Instant.ofEpochMilli(Math.addExact(start!!.epoch, it - start.elapsed))}" } ?: "") +
                     (if (work.uncertain) "\nInterrupted by reboot; actual end uncertain. Confirmed elapsed is a lower bound." else "")
@@ -520,10 +558,17 @@ internal class WorkSessionsView(
     private fun hideKeyboard() { activity.getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(windowToken, 0) }
     private fun dateTime(epoch: Long) = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(epoch))
     private fun edit(name: String, value: String) = EditText(activity).apply {
-        hint = name; contentDescription = name; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); setText(value); minHeight = dp(48)
+        hint = name; contentDescription = name; AppTheme.text(this); setHintTextColor(AppDesignPolicy.MUTED); setText(value); minHeight = dp(48)
+        background = AppTheme.shape(this); setPadding(dp(12), dp(12), dp(12), dp(12))
     }
-    private fun button(name: String, click: () -> Unit) = Button(activity).apply { text = name; isAllCaps = false; minHeight = dp(48); setOnClickListener { click() } }
-    private fun text(value: String) = TextView(activity).apply { text = value; textSize = 15f; setTextColor(Color.WHITE) }
+    private fun button(name: String, click: () -> Unit) = Button(activity).apply {
+        text = name
+        AppTheme.button(this, primary = name in setOf("New timebox", "Save intention", "Save changes", "Start timebox", "End timebox", "Allow end notification", "Allow background timing"),
+            destructive = name.startsWith("Delete") || name == "Discard draft")
+        setOnClickListener { click() }
+    }
+    private fun section(value: String) = text(value).apply { textSize = 12f; setTextColor(AppDesignPolicy.AMBER); setPadding(0, dp(12), 0, dp(6)) }
+    private fun text(value: String) = TextView(activity).apply { text = value; textSize = 15f; AppTheme.text(this); setPadding(0, dp(4), 0, dp(4)) }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
         fun remaining(ms: Long): String { val s = (ms.coerceAtLeast(0) + 999) / 1000; return "%d:%02d".format(s / 60, s % 60) }

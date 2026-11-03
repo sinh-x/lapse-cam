@@ -55,7 +55,7 @@ class TimeboxRecordingLinkTest {
             elapsed.set(1000)
             onMain {
                 model.setForeground(true)
-                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.REAR)
+                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.REAR, focus = FocusFixtures())
                 model.start(SamplingConfiguration.Fixed(60, 30))
             }
             await { model.state.value!!.frames == 1 && coordinator.state.value!!.snapshot.spans.singleOrNull()?.firstPhoto != null }

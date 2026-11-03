@@ -12,7 +12,11 @@ val ttl018Functional = providers.gradleProperty("ttl018Functional").orNull?.let 
     require(it == "true") { "ttl018Functional accepts only true (or omit the property)" }
     true
 } ?: false
-require(!(ttl018Baseline && ttl018Functional)) { "Select exactly one isolated context" }
+val ttl019Verification = providers.gradleProperty("ttl019Verification").orNull?.let {
+    require(it == "true") { "ttl019Verification accepts only true (or omit the property)" }
+    true
+} ?: false
+require(listOf(ttl018Baseline, ttl018Functional, ttl019Verification).count { it } <= 1) { "Select exactly one isolated context" }
 
 android {
     namespace = "com.sinh.timelapse"
@@ -35,6 +39,9 @@ android {
             } else if (ttl018Functional) {
                 applicationIdSuffix = ".ttl018functional"
                 manifestPlaceholders["appLabel"] = "TTL-018 Functional (disposable)"
+            } else if (ttl019Verification) {
+                applicationIdSuffix = ".ttl019verification"
+                manifestPlaceholders["appLabel"] = "TTL-019 Verification (disposable)"
             }
         }
         release {

@@ -24,7 +24,8 @@ class SessionsView(
 ) : LinearLayout(context) {
     constructor(context: Context) : this(context, {}, {}, {})
     val diagnostics = text("")
-    private val heading = text("Sessions")
+    private val heading = text("Sessions").apply { AppTheme.text(this, heading = true) }
+    internal val captureReturn = CaptureReturnView(context)
     private val attentionButton = button("Needs attention (0)") { remember(); attention = true; selected = null; rebuild() }
     private val workStatus = text("")
     private val body = FrameLayout(context)
@@ -45,6 +46,8 @@ class SessionsView(
     private var restoreListPosition = false
     private var dayKey = ""
     private var detailText: TextView? = null
+    private var captureText: TextView? = null
+    private var outputText: TextView? = null
     private var openButton: Button? = null
     private var retryButton: Button? = null
     private var deleteButton: Button? = null
@@ -68,19 +71,29 @@ class SessionsView(
             row.contentDescription = item.label
             row.setOnClickListener { item.action?.invoke() }
             row.isEnabled = item.action != null
+            val review = reviewIndex[item.key.removePrefix("session:")]
+            if (item.key == "today" || item.key.startsWith("date:")) {
+                row.background = null; row.setTextColor(AppDesignPolicy.AMBER)
+            } else { AppTheme.card(row, attention = review?.needsAttention == true); AppTheme.text(row) }
             return row
         }
     }
     init {
-        orientation = VERTICAL; setBackgroundColor(Color.rgb(16, 25, 22))
+        orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(AppDesignPolicy.BACKGROUND)
         val header = LinearLayout(context)
         header.addView(button("Back") { if (!back()) onClose?.invoke() })
         header.addView(heading, LayoutParams(0, -2, 1f)); addView(header)
-        addView(attentionButton); addView(workStatus)
-        addView(ScrollView(context).apply { addView(diagnostics); visibility = GONE }, LayoutParams(-1, dp(80)))
+        captureReturn.setOnClickListener { onClose?.invoke() }; addView(captureReturn)
+        AppTheme.button(attentionButton, primary = true)
+        val overview = LinearLayout(context).apply {
+            orientation = VERTICAL; addView(attentionButton); addView(workStatus)
+            addView(ScrollView(context).apply { addView(diagnostics); visibility = GONE }, LayoutParams(-1, dp(80)))
+        }
+        list.addHeaderView(overview, null, false)
         addView(body, LayoutParams(-1, 0, 1f)); list.adapter = adapter; rebuild()
     }
     var onClose: (() -> Unit)? = null
+    fun setCurrentActions(view: View) { list.addFooterView(view, null, false) }
     fun loading(ready: Boolean, message: String = "Loading saved sessions…") {
         if (loaded != ready || loadMessage != message) { loaded = ready; loadMessage = message; rebuild() }
     }
@@ -146,13 +159,20 @@ class SessionsView(
         else {
             heading.text = "Session details"
             val panel = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)) }
-            detailText = text(""); panel.addView(detailText)
+            detailText = text("").apply { AppTheme.card(this) }; panel.addView(detailText)
+            panel.addView(section("CAPTURE"))
+            captureText = text("").apply { AppTheme.card(this) }; panel.addView(captureText)
+            panel.addView(section("OUTPUT & RECOVERY"))
+            outputText = text("").apply { AppTheme.card(this) }; panel.addView(outputText)
             fun current(action: (SessionReview) -> Unit) { values.firstOrNull { it.id == selected }?.let(action) }
-            openButton = button("Open video") { current(open) }; panel.addView(openButton)
-            recheckButton = button("Recheck video") { selected?.let { checkOutput(it, UUID.randomUUID().toString()) } }; panel.addView(recheckButton)
-            retryButton = button("Retry") { current(retry) }; panel.addView(retryButton)
-            deleteButton = button("Delete source photos…") { current(delete) }; panel.addView(deleteButton)
+            retryButton = button("Retry") { current(retry) }.apply { AppTheme.button(this, primary = true) }; panel.addView(retryButton)
+            val outputActions = LinearLayout(context)
+            openButton = button("Open video") { current(open) }; outputActions.addView(openButton, LayoutParams(0, -2, 1f))
+            recheckButton = button("Recheck video") { selected?.let { checkOutput(it, UUID.randomUUID().toString()) } }; outputActions.addView(recheckButton, LayoutParams(0, -2, 1f))
+            panel.addView(outputActions)
             linksButton = button("Linked timeboxes") { selected?.let(linkedWork) }; panel.addView(linksButton)
+            deleteButton = button("Delete source photos…") { current(delete) }.apply { AppTheme.button(this, destructive = true) }; panel.addView(deleteButton)
+            panel.addView(text("Requires exact-session confirmation. Unknown files block deletion; published videos stay intact."))
             body.addView(ScrollView(context).apply { addView(panel) }); renderDetail()
         }
     }
@@ -195,24 +215,31 @@ class SessionsView(
         val value = reviewIndex[selected]
         if (value == null) {
             detailText?.text = if (!loaded) loadMessage else "This session is unavailable. Back returns to the browser."
+            captureText?.text = "Capture information unavailable"; outputText?.text = "Output information unavailable"
             listOf(openButton, retryButton, deleteButton, recheckButton, linksButton).forEach { it?.isEnabled = false }; return
         }
         val evidence = value.currentObservation
-        val message = "${date(value.startedAt)}\nSession ${value.id}\n${value.mode} · ${value.cap?.let { "cap ${it}s" } ?: "uncapped"} · ${value.fps} fps\n" +
+        val message = "${value.mode} · ${value.cap?.let { "cap ${it}s" } ?: "uncapped"} · ${value.fps} fps\n" +
             "Active ${value.activeMillis?.let { "${it / 1000}s" } ?: "unavailable (legacy)"}${if (value.unknownTail) " · last saved; tail unknown" else ""}\n" +
             "Sampling stage ${value.stage}\nSelected ${value.selected} / total ${value.total} · retained ${value.retained} · ${"%.1f".format(java.util.Locale.ROOT, value.bytes / 1048576.0)} MiB\n" +
-            "${value.status}\nExport attempts ${value.attempts}/3 · cleanup attempts ${value.cleanupAttempts}/3\n" +
+            "Export attempts ${value.attempts}/3 · cleanup attempts ${value.cleanupAttempts}/3\n"
+        val recovery =
             value.processing.issues.joinToString("\n") { "${it.stage.label}: ${it.reason}" } +
             (if (value.error.isNotEmpty()) "\n${value.error}" else "") +
             "\n${evidence?.let { "${it.availability.label} · checked ${date(it.checkedAt)}\n${it.diagnostic}\n${it.lastAttemptDiagnostic}" } ?: if (value.output == null) "No published video" else "Video availability not yet checked"}" +
             "\nA lightweight read is not cleanup verification. Removed photos cannot be restored."
-        if (detailText?.text.toString() != message) detailText?.text = message
+        val identity = "${value.status}\n${date(value.startedAt)}\nSession ${value.id}"
+        if (detailText?.text.toString() != identity) detailText?.text = identity
+        detailText?.let { AppTheme.card(it, attention = value.needsAttention) }
+        if (captureText?.text.toString() != message) captureText?.text = message
+        if (outputText?.text.toString() != recovery) outputText?.text = recovery
         openButton?.isEnabled = value.output != null; retryButton?.isEnabled = value.canRetry
         deleteButton?.isEnabled = value.canDelete; recheckButton?.isEnabled = value.output != null
         linksButton?.apply { text = linkSummary(value.id); isEnabled = true }
     }
     private fun date(value: Long) = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(value))
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-    private fun text(value: String) = TextView(context).apply { text = value; textSize = 15f; setTextColor(Color.WHITE) }
-    private fun button(value: String, action: () -> Unit) = Button(context).apply { text = value; minHeight = dp(48); setOnClickListener { action() } }
+    private fun section(value: String) = text(value).apply { textSize = 12f; setTextColor(AppDesignPolicy.AMBER); setPadding(0, dp(12), 0, dp(6)) }
+    private fun text(value: String) = TextView(context).apply { text = value; textSize = 15f; AppTheme.text(this) }
+    private fun button(value: String, action: () -> Unit) = Button(context).apply { text = value; AppTheme.button(this); setOnClickListener { action() } }
 }
