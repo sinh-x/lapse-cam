@@ -394,10 +394,10 @@ class MediaPipelineTest {
             onMain {
                 model.setForeground(true)
                 model.selectLens(SessionLens.FRONT)
-                model.attachCamera(ImageCapture.Builder().build(), SessionLens.REAR)
+                model.attachCamera(ImageCapture.Builder().build(), SessionLens.REAR, focus = FocusFixtures())
                 model.start(1_000, 15)
                 assertNull(model.state.value?.session)
-                model.attachCamera(ImageCapture.Builder().build(), SessionLens.FRONT)
+                model.attachCamera(ImageCapture.Builder().build(), SessionLens.FRONT, focus = FocusFixtures())
                 model.start(1_000, 15)
                 model.selectLens(SessionLens.REAR) // Creation has already frozen front.
                 model.stop()
@@ -441,7 +441,7 @@ class MediaPipelineTest {
             onMain {
                 model.setForeground(true)
                 model.selectLens(SessionLens.FRONT)
-                model.attachCamera(ImageCapture.Builder().build(), SessionLens.FRONT)
+                model.attachCamera(ImageCapture.Builder().build(), SessionLens.FRONT, focus = FocusFixtures())
                 model.start(1_000, 15)
             }
             awaitState(model) { it.savingPhoto && completion.get() != null }
@@ -485,7 +485,7 @@ class MediaPipelineTest {
         try {
             onMain {
                 model.setForeground(true)
-                model.attachCamera(ImageCapture.Builder().build(), SessionLens.REAR)
+                model.attachCamera(ImageCapture.Builder().build(), SessionLens.REAR, focus = FocusFixtures())
                 model.start(1_000, 15)
             }
             assertTrue(entered.await(10, TimeUnit.SECONDS))
@@ -517,7 +517,7 @@ class MediaPipelineTest {
             onMain {
                 assertTrue(checkNotNull(model.state.value).recoveryBlocked)
                 model.selectLens(SessionLens.FRONT)
-                model.attachCamera(ImageCapture.Builder().build(), SessionLens.REAR)
+                model.attachCamera(ImageCapture.Builder().build(), SessionLens.REAR, focus = FocusFixtures())
                 model.setForeground(true)
                 model.start(1_000, 30)
                 assertNull(model.state.value?.session)

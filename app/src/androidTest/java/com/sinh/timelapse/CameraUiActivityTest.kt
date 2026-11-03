@@ -46,15 +46,17 @@ class CameraUiActivityTest {
                 val density = activity.resources.displayMetrics.density
                 val texts = WorkUiFixtures.descendants(root).filterIsInstance<TextView>()
                 val sizes = texts.associateWith { it.textSize }
-                for (factor in listOf(1f, 2f)) {
+                for (factor in listOf(1f, 1.3f, 2f)) {
                     // Labelled linear text-scale fixture; real nonlinear system-font UAT is separate.
                     sizes.forEach { (text, px) -> text.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, px * factor) }
-                    for ((widthDp, heightDp) in listOf(360 to 640, 412 to 915)) {
+                    for ((widthDp, heightDp) in listOf(360 to 640, 412 to 892)) {
                         val width = (widthDp * density).toInt(); val height = (heightDp * density).toInt()
                         root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
                         root.layout(0, 0, width, height)
                         val controls = WorkUiFixtures.descendants(root).filterIsInstance<Button>().filter { it.visibility == View.VISIBLE }
                         controls.forEach { button ->
+                            // Camera may scroll at large text; each essential control must be reachable.
+                            button.requestRectangleOnScreen(android.graphics.Rect(0, 0, button.width, button.height), true)
                             val rectangle = android.graphics.Rect(); button.getDrawingRect(rectangle)
                             (root as ViewGroup).offsetDescendantRectToMyCoords(button, rectangle)
                             assertTrue("${button.text} bounds $rectangle at $widthDp/$heightDp/$factor", rectangle.top >= 0 && rectangle.bottom <= height && rectangle.left >= 0 && rectangle.right <= width)

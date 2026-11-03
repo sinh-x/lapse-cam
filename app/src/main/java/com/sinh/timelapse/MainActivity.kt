@@ -34,6 +34,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
@@ -49,6 +51,7 @@ import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.min
 
+@androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
 class MainActivity : ComponentActivity() {
     private val model: CaptureViewModel by viewModels()
     private val work by lazy { WorkSessionCoordinator.get(application) }
@@ -107,6 +110,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var lens: Spinner
     private lateinit var recovery: Button
     private lateinit var capture: Button
+    private lateinit var lensSwitch: Button
+    private lateinit var modeChip: Button
+    private lateinit var cadenceChip: Button
+    private lateinit var fpsChip: Button
+    private var cameraFocus: CameraFocusController? = null
     private lateinit var export: Button
     private lateinit var discard: Button
     private lateinit var open: Button
@@ -237,7 +245,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState?.getString("browserTop") == "timeboxes") { restoreSessions(); restoreTimeboxes() }
         else { restoreTimeboxes(); restoreSessions() }
         if (savedInstanceState == null) routeSessions(intent)
-        if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings()
+        if (savedInstanceState?.getBoolean("sheetOpen") == true) showSettings(savedInstanceState.getBoolean("sheetTimestamp"))
         if (!hasCameraPermission() && savedInstanceState == null) requestCamera.launch(Manifest.permission.CAMERA)
     }
 
@@ -255,7 +263,7 @@ class MainActivity : ComponentActivity() {
             state.thinningStage, state.missedSlots, state.lastShutterGapMillis, state.lastSaveMillis, state.lastSwitchMillis)
         summary.text = String.format(Locale.ROOT, "Capture %s · %d photos · est. MP4 %.1fs", active, state.frames, seconds)
         // Errors stay on Camera. Routine diagnostics/export progress live in Recording details.
-        val message = listOf(state.message, state.cameraMessage).filter { it.isNotEmpty() }.joinToString("\n")
+        val message = listOf(state.focusError, state.cameraMessage, state.message).distinct().filter { it.isNotEmpty() }.joinToString("\n")
         val safetyError = state.blackoutSafetyError
         val actionable = safetyError || state.messageImpact == CaptureMessageImpact.INDEPENDENT
         status.visibility = if (actionable) View.VISIBLE else View.GONE
@@ -264,10 +272,16 @@ class MainActivity : ComponentActivity() {
         if (status.text.toString() != message) status.text = message
         val ui = CameraUiPolicy.project(CameraUiPolicy.Input(state.capturing, session != null, state.busy, state.switching,
             state.recoveryBlocked, state.boundLens == state.lens, session?.split != null && session.split != SessionSplit.OFF, state.loading, state.working))
-        capture.text = ui.primary; capture.contentDescription = ui.primary; capture.isEnabled = ui.enabled
-        val liveLabel = when {
+        capture.text = when { state.focusing -> "Holding focus…"; state.focusError.isNotEmpty() -> "Retry focus"; else -> ui.primary }
+        capture.contentDescription = capture.text; capture.isEnabled = ui.enabled
+        lensSwitch.isEnabled = state.canSelectLens
+        lensSwitch.text = if (state.canSelectLens) "Switch camera" else "Camera locked"
+        lensSwitch.contentDescription = "${state.lens.storedValue} camera. ${lensSwitch.text}"
+                val liveLabel = when {
             ui.live -> "● LIVE"
             state.recoveryBlocked || state.cameraMessage.isNotEmpty() -> "Error"
+            state.focusing -> "Holding focus…"
+            state.focusError.isNotEmpty() -> "Focus needs attention"
             state.switching -> "Switching"
             state.working -> "Starting / Finishing"
             state.loading -> "Loading"
@@ -288,8 +302,8 @@ class MainActivity : ComponentActivity() {
         split.isEnabled = state.canSelectLens && mode.selectedItemPosition == 0
         interval.isEnabled = state.canSelectLens && mode.selectedItemPosition == 1
         fps.isEnabled = state.canSelectLens; lens.isEnabled = state.canSelectLens
-        // Preserve TTL-006's mutation-entry lock; gear still permits read-only inspection.
-        timestampSettings.isEnabled = state.canSelectLens
+        // Settings entry remains inspectable; mutations inside the sheet remain locked.
+        timestampSettings.isEnabled = true
         setChildrenEnabled(timestampPanel, state.canSelectLens)
         sheet?.setLocked(!state.canSelectLens)
         lens.setSelection(SessionLens.entries.indexOf(state.lens))
@@ -303,7 +317,8 @@ class MainActivity : ComponentActivity() {
             fps.setSelection(frameRates.indexOf(session.fps).coerceAtLeast(0))
             updateTimestampControls(session.appearance)
         }
-        if (state.capturing || state.savingPhoto || state.exporting) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        refreshSettingChips()
+        if (state.capturing || state.savingPhoto || state.exporting || state.focusing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         blackoutLive = ui.live
         blackoutCameraReady = state.boundLens == state.lens && !state.loading && !state.recoveryBlocked && !state.switching && !state.working
@@ -326,7 +341,7 @@ class MainActivity : ComponentActivity() {
         split = spinner(listOf("Off — keep photos, manual export", "2 hours", "3 hours (default)")).apply { contentDescription = "Adaptive automatic session split"; setSelection(saved?.getInt("split") ?: SessionSplit.entries.indexOf(defaults.split)) }
         interval = spinner(intervals.map { "Every ${it}s" }).apply { contentDescription = "Photo capture interval"; setSelection(saved?.getInt("interval") ?: intervals.indexOf(defaults.interval).coerceAtLeast(0)) }
         fps = spinner(frameRates.map { "$it fps" }).apply { contentDescription = "Export frames per second"; setSelection(saved?.getInt("fps") ?: frameRates.indexOf(defaults.fps).coerceAtLeast(0)) }
-        listOf(lens, label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not timebox minutes", 14f), maxSeconds,
+        listOf(label("Capture mode", 14f), mode, label("Maximum Adaptive MP4 seconds (5–600), not timebox minutes", 14f), maxSeconds,
             label("Adaptive auto-split (active recording time)", 14f), split, interval, fps).forEach { capturePanel.addView(it) }
         capturePanel.addView(label("With 2h/3h, Pause retains the session; Finish exports. Only verified output permits source cleanup. Off/Fixed/legacy remain manual. Foreground only; no cadence/storage guarantee.", 14f))
         blackoutToggle = CheckBox(this).apply {
@@ -343,10 +358,10 @@ class MainActivity : ComponentActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
         timestampPanel = buildTimestampPanel()
-        timestampSettings = Button(this).apply { text = "Timestamp appearance…"; setOnClickListener { showSettings(true) } }
+        timestampSettings = Button(this).apply { text = "Timestamp"; AppTheme.button(this); setOnClickListener { showSettings(true) } }
         statistics = label("0 photos", 14f)
         backlog = label("Sessions", 14f)
-        status = label("", 13f).apply { visibility = View.GONE; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        status = label("", 13f).apply { visibility = View.GONE; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
         attentionNotice = label("", 14f).apply {
             visibility = View.GONE
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -376,24 +391,23 @@ class MainActivity : ComponentActivity() {
             val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
             view.setPadding(dp(8) + bars.left, bars.top, dp(8) + bars.right, bars.bottom); insets
         }
-        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val cardTop = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        workTitle = label("No timebox running", 14f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-        cardTop.addView(workTitle, LinearLayout.LayoutParams(0, -2, 1f))
-        workButton = Button(this).apply { text = "Timeboxes"; setOnClickListener { showWork() } }
-        cardTop.addView(workButton, LinearLayout.LayoutParams(-2, -2))
-        card.addView(cardTop)
-        val timing = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        workRemaining = label("", 14f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
-        timing.addView(workRemaining, LinearLayout.LayoutParams(0, -2, 1f))
+        val card = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        workTitle = label("No timebox running", 14f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+        card.addView(workTitle, LinearLayout.LayoutParams(0, -2, 1f))
+        workRemaining = label("", 16f).apply { setTextColor(AppDesignPolicy.AMBER) }
+        card.addView(workRemaining)
+        workButton = Button(this).apply { text = "Timeboxes"; AppTheme.button(this); setOnClickListener { showWork() } }
+        card.addView(workButton)
+        // End remains an explicit action in the running timebox, never an accidental strip tap.
         workEnd = Button(this).apply { text = "End"; contentDescription = "End timebox"; setOnClickListener { work.state.value?.snapshot?.running?.id?.let(work::end) } }
-        timing.addView(workEnd); card.addView(timing); root.addView(card)
+        AppTheme.card(card)
         val hud = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        hud.addView(Button(this).apply { text = "⚙"; contentDescription = "Camera settings"; minWidth = dp(48); setOnClickListener { showSettings() } })
-        live = label("Ready", 14f).apply { gravity = Gravity.END; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
-        hud.addView(live, LinearLayout.LayoutParams(0, -2, 1f)); root.addView(hud)
+        live = label("Ready", 14f).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        hud.addView(live, LinearLayout.LayoutParams(0, -2, 1f))
+        hud.addView(Button(this).apply { text = "⚙"; contentDescription = "Camera settings"; AppTheme.button(this); setOnClickListener { showSettings() } })
+        root.addView(hud); root.addView(card)
         // HUD is a sibling outside the exact output frame, never a child of the JPEG/MP4 renderer.
-        val previewContainer = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); contentDescription = "Camera preview" }
+        val previewContainer = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); contentDescription = "Camera preview"; minimumHeight = dp(160) }
         val videoFrame = FrameLayout(this)
         preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.COMPATIBLE }
         videoFrame.addView(preview, FrameLayout.LayoutParams(-1, -1))
@@ -413,23 +427,35 @@ class MainActivity : ComponentActivity() {
         recovery = Button(this).apply { text = "Retry saved session recovery"; visibility = View.GONE; setOnClickListener { model.retryRecovery() } }
         processingStatus = label("Loading media processing status…", 13f)
         root.addView(permission); root.addView(recovery); root.addView(status); root.addView(attentionNotice); root.addView(summary)
-        root.addView(processingStatus)
+        // Routine processing is available in Sessions, not an extra Camera row.
+        modeChip = Button(this).apply { AppTheme.button(this, primary = true); setOnClickListener { showSettings() } }
+        cadenceChip = Button(this).apply { AppTheme.button(this); setOnClickListener { showSettings() } }
+        fpsChip = Button(this).apply { AppTheme.button(this); setOnClickListener { showSettings() } }
+        root.addView(modeChip, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        val chips = LinearLayout(this)
+        listOf(cadenceChip, fpsChip, timestampSettings).forEach { chips.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
+        root.addView(chips)
         capture = Button(this).apply {
             text = "Start capture"; minHeight = dp(72); minWidth = dp(72); textSize = 12f
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(255, 205, 205)) }
-            setTextColor(Color.BLACK); setOnClickListener { captureAction() }
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.rgb(220, 40, 61)); setStroke(dp(3), AppDesignPolicy.TEXT) }
+            setTextColor(Color.WHITE); setOnClickListener { captureAction() }
         }
-        finish = Button(this).apply { text = "Finish session\nand export"; visibility = View.GONE; setOnClickListener { model.finishSession() } }
+        finish = Button(this).apply { text = "Finish & export"; AppTheme.button(this, primary = true); visibility = View.GONE; setOnClickListener { model.finishSession() } }
         val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        sessionsButton = Button(this).apply { text = "Sessions"; setOnClickListener { showSessions() } }
+        sessionsButton = Button(this).apply { text = "Sessions"; AppTheme.button(this); setOnClickListener { showSessions() } }
+        lensSwitch = Button(this).apply { text = "Switch camera"; AppTheme.button(this); setOnClickListener {
+            val state = model.state.value ?: return@setOnClickListener
+            if (state.canSelectLens) model.selectLens(if (state.lens == SessionLens.REAR) SessionLens.FRONT else SessionLens.REAR)
+        } }
         controls.addView(sessionsButton, LinearLayout.LayoutParams(0, -2, 1f))
         controls.addView(capture, LinearLayout.LayoutParams(dp(96), dp(96)))
-        controls.addView(finish, LinearLayout.LayoutParams(0, -2, 1f))
+        controls.addView(lensSwitch, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(controls)
         val destinations = LinearLayout(this)
         destinations.addView(Button(this).apply { text = "Details"; AppTheme.button(this); setOnClickListener { showRecordingDetails() } }, LinearLayout.LayoutParams(0, -2, 1f))
         destinations.addView(Button(this).apply { text = "Private sync"; AppTheme.button(this); setOnClickListener { showSharedHistory() } }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(destinations)
+        root.addView(finish)
         cameraUi = root
         blackoutBanner = label("LIVE — recording", 16f).apply {
             gravity = Gravity.CENTER; setBackgroundColor(Color.rgb(170, 0, 0))
@@ -453,7 +479,7 @@ class MainActivity : ComponentActivity() {
             "Return to Camera; timelapse recording continues") { _, _ -> returnFromBlackout(); true }
         val host = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            addView(root, FrameLayout.LayoutParams(-1, -1))
+            addView(ScrollView(this@MainActivity).apply { isFillViewport = true; addView(root) }, FrameLayout.LayoutParams(-1, -1))
             addView(blackoutCover, FrameLayout.LayoutParams(-1, -1))
         }
         setContentView(host); root.requestApplyInsets(); blackoutCover.requestApplyInsets()
@@ -659,8 +685,14 @@ class MainActivity : ComponentActivity() {
         if (sheet?.isShowing == true) return
         sheet = CameraSettingsSheet(this, capturePanel, timestampPanel, timestamp).apply {
             setLocked(model.state.value?.canSelectLens != true)
-            showBlackoutModal(this) { sheet = null }
+            showBlackoutModal(this) { sheet = null; refreshSettingChips() }
         }
+    }
+    private fun refreshSettingChips() {
+        val locked = model.state.value?.canSelectLens != true
+        modeChip.text = (if (mode.selectedItemPosition == 0) "ADAPTIVE" else "FIXED") + if (locked) " · Locked" else " ›"
+        cadenceChip.text = if (mode.selectedItemPosition == 0) "${maxSeconds.text}s video cap" else "${intervals[interval.selectedItemPosition]}s interval"
+        fpsChip.text = "${frameRates[fps.selectedItemPosition]} fps"
     }
     private var stampFields: List<Spinner> = emptyList()
     private var stampDate: CheckBox? = null
@@ -823,7 +855,7 @@ class MainActivity : ComponentActivity() {
             if (work.state.value?.error != null) "Timebox context unavailable; retained" else "Linked timeboxes: ${links.map { it.workId }.distinct().size}"
         }, checkOutput = model::recheckVideo)
         val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        listOf(backlog, export, open, discard).forEach { (it.parent as? ViewGroup)?.removeView(it); actions.addView(it) }
+        listOf(backlog, processingStatus, export, open, discard).forEach { (it.parent as? ViewGroup)?.removeView(it); actions.addView(it) }
         view.addView(ScrollView(this).apply { addView(actions) }, LinearLayout.LayoutParams(-1, dp(128)))
         sessionsView = view; sessionAttentionDetails = view.diagnostics; topBrowser = "sessions"
         val state = model.state.value
@@ -878,7 +910,7 @@ class MainActivity : ComponentActivity() {
         catch (_: ActivityNotFoundException) { Toast.makeText(this, "No video player installed. Find the MP4 in Movies/TimestampTimelapse.", Toast.LENGTH_LONG).show() }
         catch (_: SecurityException) { Toast.makeText(this, "Video unavailable. See Sessions; removed photos cannot be restored.", Toast.LENGTH_LONG).show() }
     }
-    private fun invalidateCamera() { bindingGeneration++; requestedLens = null; model.attachCamera(null) }
+    private fun invalidateCamera() { bindingGeneration++; requestedLens = null; model.attachCamera(null); cameraFocus?.release(); cameraFocus = null }
     private fun bindCamera() {
         val state = model.state.value ?: return
         if (!activityForeground || !hasCameraPermission() || state.loading || state.recoveryBlocked) return
@@ -898,14 +930,27 @@ class MainActivity : ComponentActivity() {
                 provider.unbindAll()
                 val selector = if (selected == SessionLens.FRONT) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                 check(provider.hasCamera(selector)) { "Selected ${selected.storedValue} camera is unavailable; no fallback used" }
-                val previewUseCase = Preview.Builder().setTargetRotation(Surface.ROTATION_0).build().apply { surfaceProvider = preview.surfaceProvider }
+                cameraFocus?.release()
+                val focus = CameraFocusController(ContextCompat.getMainExecutor(this))
+                cameraFocus = focus
+                val previewBuilder = Preview.Builder().setTargetRotation(Surface.ROTATION_0)
+                Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(focus.captureCallback)
+                val previewUseCase = previewBuilder.build().apply { surfaceProvider = preview.surfaceProvider }
                 @Suppress("DEPRECATION")
-                val imageCapture = ImageCapture.Builder().setTargetResolution(Size(VIDEO_WIDTH, VIDEO_HEIGHT)).setTargetRotation(Surface.ROTATION_0)
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
+                val captureBuilder = ImageCapture.Builder().setTargetResolution(Size(VIDEO_WIDTH, VIDEO_HEIGHT)).setTargetRotation(Surface.ROTATION_0)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                val imageCapture = captureBuilder.build()
                 val group = UseCaseGroup.Builder().setViewPort(ViewPort.Builder(Rational(9, 16), Surface.ROTATION_0).setScaleType(ViewPort.FILL_CENTER).build())
                     .addUseCase(previewUseCase).addUseCase(imageCapture).build()
-                provider.bindToLifecycle(this, selector, group)
-                model.attachCamera(imageCapture, selected); permission.visibility = View.GONE
+                val camera = provider.bindToLifecycle(this, selector, group)
+                focus.attach(camera)
+                camera.cameraInfo.cameraState.observe(this) { cameraState ->
+                    if (cameraFocus === focus && cameraState.error != null) {
+                        model.attachCamera(null, message = "Camera disconnected. Photos retained. Retry camera.")
+                        permission.text = "Retry camera"; permission.visibility = View.VISIBLE
+                    }
+                }
+                model.attachCamera(imageCapture, selected, focus = focus); permission.visibility = View.GONE
             } catch (error: Exception) {
                 model.attachCamera(null, message = "Camera error: ${error.message}. Saved-photo export remains available.")
                 permission.text = "Retry camera"; permission.visibility = View.VISIBLE
@@ -916,6 +961,7 @@ class MainActivity : ComponentActivity() {
         outState.putInt("mode", mode.selectedItemPosition); outState.putString("cap", maxSeconds.text.toString())
         outState.putInt("split", split.selectedItemPosition); outState.putInt("interval", interval.selectedItemPosition); outState.putInt("fps", fps.selectedItemPosition)
         outState.putBoolean("sheetOpen", sheet?.isShowing == true)
+        outState.putBoolean("sheetTimestamp", sheet?.isTimestamp == true)
         outState.putBoolean("workOpen", workView != null); outState.putString("workPage", workView?.savedPage()); outState.putString("workId", workView?.selectedId()); outState.putString("workSetupReturn", workView?.setupReturnId()); outState.putBoolean("workArchivedView", workView?.isShowingArchived() == true)
         outState.putString("workTypeFilter", workView?.activityTypeFilter()); outState.putString("workSort", workView?.listSort())
         outState.putString("browserTop", topBrowser)

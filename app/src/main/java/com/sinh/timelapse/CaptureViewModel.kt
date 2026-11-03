@@ -59,11 +59,13 @@ class CaptureViewModel @JvmOverloads constructor(
         val sessionSafetyBlocked: Boolean = false,
         val video: Uri? = null,
         val switching: Boolean = false,
+        val focusing: Boolean = false,
+        val focusError: String = "",
     ) {
-        val blackoutSafetyError: Boolean get() = recoveryBlocked || cameraMessage.isNotEmpty() ||
+        val blackoutSafetyError: Boolean get() = recoveryBlocked || cameraMessage.isNotEmpty() || focusError.isNotEmpty() ||
             queueSafetyBlocked || sessionSafetyBlocked || messageImpact == CaptureMessageImpact.CAPTURE_SAFETY ||
             messageImpact == CaptureMessageImpact.UNKNOWN
-        val busy: Boolean get() = loading || working || savingPhoto || exporting
+        val busy: Boolean get() = loading || working || savingPhoto || exporting || focusing
         val lens: SessionLens get() = session?.lens ?: selectedLens
         val canSelectLens: Boolean get() = CapturePolicy.canSelectLens(session != null, busy, recoveryBlocked)
     }
@@ -130,6 +132,8 @@ class CaptureViewModel @JvmOverloads constructor(
     private var closeGate = SessionCloseGate()
     private var resumeAfterClose = false
     private var imageCapture: ImageCapture? = null
+    private var focus: CaptureFocus? = null
+    private var focusAttempt = 0L
     @Volatile private var foreground = false
     private var cadenceStart = 0L
     private var captureRequest = 0L
@@ -289,14 +293,16 @@ class CaptureViewModel @JvmOverloads constructor(
         update(current.copy(selectedLens = lens, boundLens = null, cameraMessage = ""))
     }
 
-    fun attachCamera(capture: ImageCapture?, lens: SessionLens? = null, message: String = "") {
+    fun attachCamera(capture: ImageCapture?, lens: SessionLens? = null, message: String = "", focus: CaptureFocus? = null) {
+        stop("Camera changed. Saved photos are kept.")
+        this.focus = focus
         val usable = capture != null && lens == current.lens && !current.loading && !current.recoveryBlocked
         imageCapture = if (usable) capture else null
         if (!usable) stop("Camera unavailable. Saved photos are kept.", CaptureMessageImpact.CAPTURE_SAFETY)
         update(current.copy(boundLens = if (usable) lens else null, cameraMessage = message))
     }
 
-    private fun cameraReady(): Boolean = imageCapture != null && CapturePolicy.canCapture(
+    private fun cameraReady(requireFocus: Boolean = true): Boolean = imageCapture != null && (!requireFocus || focus?.held == true) && CapturePolicy.canCapture(
         current.lens, current.boundLens, foreground, current.loading || current.recoveryBlocked)
 
     fun start(intervalMillis: Long, fps: Int) = start(SamplingConfiguration.Fixed(Math.toIntExact(intervalMillis / 1000), fps))
@@ -304,10 +310,31 @@ class CaptureViewModel @JvmOverloads constructor(
     fun start(configuration: SamplingConfiguration, appearance: TimestampAppearance = TimestampAppearance(),
         split: SessionSplit = SessionSplit.OFF) {
         if (current.busy || current.capturing || current.recoveryBlocked) return
-        if (!cameraReady()) {
+        if (!cameraReady(false)) {
             update(current.copy(messageImpact = CaptureMessageImpact.CAPTURE_SAFETY, message = "Allow camera access and wait for the preview first."))
             return
         }
+        val controller = focus
+        if (controller == null) {
+            update(current.copy(focusError = "Focus hold is unavailable. Retry camera.", messageImpact = CaptureMessageImpact.CAPTURE_SAFETY))
+            return
+        }
+        val attempt = ++focusAttempt
+        update(current.copy(focusing = true, focusError = "", messageImpact = CaptureMessageImpact.ROUTINE, message = "Holding focus…"))
+        controller.acquire { held, reason ->
+            if (attempt != focusAttempt || closed) return@acquire
+            if (!held || !controller.held) {
+                stop(reason, CaptureMessageImpact.CAPTURE_SAFETY)
+                update(current.copy(focusError = reason.ifEmpty { "Focus hold was lost. Photos retained. Retry." }))
+            } else if (current.focusing && foreground && cameraReady()) {
+                update(current.copy(focusing = false))
+                startFocused(configuration, appearance, split)
+            }
+        }
+    }
+
+    private fun startFocused(configuration: SamplingConfiguration, appearance: TimestampAppearance, split: SessionSplit) {
+        if (!cameraReady()) return
         if (current.session != null) {
             beginCapture()
             return
@@ -353,7 +380,11 @@ class CaptureViewModel @JvmOverloads constructor(
         capturePhoto()
     }
 
-    fun stop(message: String = "Capture paused. Export or resume when ready.", impact: CaptureMessageImpact = CaptureMessageImpact.ROUTINE) {
+    fun stop(message: String = "Capture paused. Export or resume when ready.", impact: CaptureMessageImpact = CaptureMessageImpact.ROUTINE) = pauseCapture(message, impact, false)
+
+    private fun pauseCapture(message: String, impact: CaptureMessageImpact, preserveFocus: Boolean) {
+        if (!preserveFocus) { focusAttempt++; focus?.release() }
+        if (current.focusing) update(current.copy(focusing = false))
         resumeAfterClose = false
         captureRequest++
         main.removeCallbacks(nextCapture)
@@ -392,7 +423,8 @@ class CaptureViewModel @JvmOverloads constructor(
         closeGate.request(reason)
         if (reason == SessionCloseGate.Reason.ROLLOVER && switchingSince == null) switchingSince = monotonicMillis()
         if (reason == SessionCloseGate.Reason.FINISH) switchingSince = null
-        stop(if (reason == SessionCloseGate.Reason.ROLLOVER) "Switching session; draining photo…" else "Finishing; draining photo…")
+        pauseCapture(if (reason == SessionCloseGate.Reason.ROLLOVER) "Switching session; draining photo…" else "Finishing; draining photo…",
+            CaptureMessageImpact.ROUTINE, preserveFocus = continueCapture)
         resumeAfterClose = continueCapture
         update(current.copy(switching = true))
         drainClose()

@@ -135,7 +135,7 @@ class SessionRolloverTest {
             await { !it.loading }
             onMain {
                 model.setForeground(true)
-                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.REAR)
+                model.attachCamera(androidx.camera.core.ImageCapture.Builder().build(), SessionLens.REAR, focus = FocusFixtures())
                 model.start(SamplingConfiguration.Adaptive(5, 15), split = SessionSplit.TWO_HOURS)
             }
             val first = await { it.savingPhoto && completion.get() != null }
