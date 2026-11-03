@@ -149,6 +149,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraUi: ViewGroup
     private lateinit var blackoutCover: FrameLayout
     private lateinit var blackoutBanner: TextView
+    private lateinit var blackoutTitle: TextView
+    private lateinit var blackoutRemaining: TextView
+    private lateinit var blackoutRemainingLabel: TextView
+    private lateinit var blackoutRecording: TextView
     private lateinit var blackoutToggle: CheckBox
     private var blackoutLive = false
     private var blackoutCameraReady = false
@@ -318,6 +322,7 @@ class MainActivity : ComponentActivity() {
             updateTimestampControls(session.appearance)
         }
         refreshSettingChips()
+        renderBlackoutContent(state)
         if (state.capturing || state.savingPhoto || state.exporting || state.focusing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         blackoutLive = ui.live
@@ -458,7 +463,7 @@ class MainActivity : ComponentActivity() {
         root.addView(finish)
         cameraUi = root
         blackoutBanner = label("LIVE — recording", 16f).apply {
-            gravity = Gravity.CENTER; setBackgroundColor(Color.rgb(170, 0, 0))
+            gravity = Gravity.CENTER; background = AppTheme.shape(this, AppDesignPolicy.DANGER_SURFACE, AppDesignPolicy.DANGER_SURFACE)
             setPadding(dp(12), dp(6), dp(12), dp(6))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
@@ -474,6 +479,24 @@ class MainActivity : ComponentActivity() {
                 view.setPadding(bars.left, bars.top + dp(16), bars.right, bars.bottom); insets
             }
             addView(blackoutBanner, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        }
+        blackoutTitle = label("No timebox running", 18f).apply { gravity = Gravity.CENTER; AppTheme.text(this, muted = true) }
+        blackoutRemaining = label("", 56f).apply {
+            gravity = Gravity.CENTER; typeface = android.graphics.Typeface.MONOSPACE; maxLines = 1
+            setAutoSizeTextTypeUniformWithConfiguration(24, 56, 2, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
+        blackoutRemainingLabel = label("Timebox remaining", 14f).apply { gravity = Gravity.CENTER; AppTheme.text(this, muted = true) }
+        blackoutRecording = label("Active recording\n00:00:00", 18f).apply { gravity = Gravity.CENTER; typeface = android.graphics.Typeface.MONOSPACE }
+        val blackoutContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8))
+            addView(blackoutTitle); addView(blackoutRemaining, LinearLayout.LayoutParams(-1, dp(112))); addView(blackoutRemainingLabel)
+        }
+        blackoutCover.addView(ScrollView(this).apply { isFillViewport = true; addView(blackoutContent) },
+            FrameLayout.LayoutParams(-1, -1).apply { topMargin = dp(72); bottomMargin = dp(120) })
+        blackoutCover.addView(blackoutRecording, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(32) })
+        // One accessible reveal node; none of the presentation children can reach hidden controls.
+        listOf(blackoutTitle, blackoutRemaining, blackoutRemainingLabel, blackoutRecording).forEach {
+            it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         ViewCompat.replaceAccessibilityAction(blackoutCover, AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
             "Return to Camera; timelapse recording continues") { _, _ -> returnFromBlackout(); true }
@@ -557,6 +580,24 @@ class MainActivity : ComponentActivity() {
             (view.parent as? View)?.visibility = if (detail.isEmpty()) View.GONE else View.VISIBLE
         }
         if (sessions == 0 && sessionNotices == 0 && workCount == 0) attentionNotice.visibility = View.GONE
+    }
+
+    private fun renderBlackoutContent(captureState: CaptureViewModel.State? = model.state.value) {
+        if (!::blackoutRecording.isInitialized) return
+        val state = work.state.value
+        val running = state?.snapshot?.running
+        val display = CaptureDisplayPolicy.blackout(running?.title,
+            running?.let { runCatching { WorkSessionsView.remaining(it.remaining(work.now())) }.getOrNull() },
+            captureState?.activeMillis ?: if (captureState?.session == null) 0L else null,
+            captureState?.unknownTail == true, state?.loaded == true && state.error == null)
+        if (blackoutTitle.text.toString() != display.title) blackoutTitle.text = display.title
+        if (blackoutRemaining.text.toString() != display.remaining) blackoutRemaining.text = display.remaining
+        val hasCountdown = display.remaining.isNotEmpty()
+        blackoutRemaining.visibility = if (hasCountdown) View.VISIBLE else View.GONE
+        blackoutRemainingLabel.visibility = blackoutRemaining.visibility
+        val recording = "Active recording\n${display.recording}"
+        if (blackoutRecording.text.toString() != recording) blackoutRecording.text = recording
+        blackoutCover.contentDescription = "Recording timelapse. ${display.title}. ${display.remaining}. $recording. Return to Camera; recording continues."
     }
 
     private fun renderBlackout() {
@@ -803,6 +844,7 @@ class MainActivity : ComponentActivity() {
         workRemaining.visibility = if (workRemaining.text.isEmpty()) View.GONE else View.VISIBLE
         workEnd.visibility = if (running == null) View.GONE else View.VISIBLE; workEnd.isEnabled = state.loaded
         workView?.render(state)
+        renderBlackoutContent()
         if (state.loaded && lastWorkRecords !== state.snapshot.records) {
             lastWorkRecords = state.snapshot.records
             blackout.observeTerminals(state.snapshot.records.filter { it.state == WorkState.ENDED }
